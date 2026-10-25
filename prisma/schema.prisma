@@ -1,10 +1,13 @@
 generator client {
-  provider = "prisma-client-js"
+  provider        = "prisma-client-js"
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  schemas   = ["autotube"]
 }
 
 /// Singleton row (id = "default") for API credentials and schedule preferences.
@@ -28,6 +31,8 @@ model Settings {
   channelId          String?
   channelTitle       String?
   updatedAt          DateTime @updatedAt
+
+  @@schema("autotube")
 }
 
 /// Per-date upload times. `times` is comma-separated HH:mm. Empty means no uploads that day.
@@ -35,6 +40,8 @@ model DayPlan {
   date      String   @id
   times     String
   updatedAt DateTime @updatedAt
+
+  @@schema("autotube")
 }
 
 /// Drive file plus queue, fingerprint, SEO, and upload state.
@@ -72,6 +79,7 @@ model Video {
   @@index([status, scheduledAt])
   @@index([isCanonical])
   @@index([duplicateOfId])
+  @@schema("autotube")
 }
 
 model UploadLog {
@@ -83,4 +91,5 @@ model UploadLog {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+  @@schema("autotube")
 }

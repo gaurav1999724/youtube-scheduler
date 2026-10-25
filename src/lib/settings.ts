@@ -1,5 +1,5 @@
 import { formatInTimeZone } from "date-fns-tz";
-import { prisma, ensureWal } from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
 import { parseDriveFolderId } from "@/lib/drive-link";
 import {
   DEFAULT_DRIVE_FOLDER_ID,
@@ -64,7 +64,6 @@ export function appUrl() {
 }
 
 export async function ensureSettingsRow() {
-  await ensureWal();
   const existing = await prisma.settings.findUnique({ where: { id: SETTINGS_ID } });
   if (existing) return existing;
   return prisma.settings.create({

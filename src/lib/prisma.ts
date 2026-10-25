@@ -11,18 +11,3 @@ export const prisma =
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
-
-let walReady: Promise<void> | null = null;
-
-export function ensureWal() {
-  if (!walReady) {
-    walReady = prisma
-      .$queryRawUnsafe("PRAGMA journal_mode=WAL;")
-      .then(() => undefined)
-      .catch((error) => {
-        walReady = null;
-        throw error;
-      });
-  }
-  return walReady;
-}
