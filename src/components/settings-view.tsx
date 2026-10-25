@@ -152,7 +152,7 @@ export function SettingsView() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">
-        Upload now ignores the scheduler. It takes the next video, asks OpenAI for the title, description, and tags, and publishes that video on YouTube immediately.
+        Upload now ignores the scheduler. It takes the next video, asks OpenAI for the title, description, and tags, and publishes that video on YouTube immediately. Clips under 10 seconds are skipped. Videos from 10 seconds through 2 minutes go out as Shorts. Videos longer than 2 minutes go out as normal videos.
       </p>
       <Tabs defaultValue="drive">
         <TabsList className="flex h-auto flex-wrap">

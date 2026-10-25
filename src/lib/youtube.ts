@@ -6,6 +6,52 @@ import { errorMessage, type PrivacyStatus } from "@/lib/types";
 
 type Youtube = ReturnType<typeof google.youtube>;
 
+export const SHORTS_MIN_SECONDS = 10;
+export const SHORTS_MAX_SECONDS = 120;
+
+export type VideoLength = "skip" | "short" | "standard";
+
+/** Under 10 seconds is skipped. 10 seconds through 2 minutes is a Short. Longer than 2 minutes is a normal video. */
+export function classifyDuration(seconds: number): VideoLength {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "standard";
+  if (seconds < SHORTS_MIN_SECONDS) return "skip";
+  if (seconds <= SHORTS_MAX_SECONDS) return "short";
+  return "standard";
+}
+
+function mentionsShorts(value: string) {
+  return /#shorts\b/i.test(value);
+}
+
+function stripShorts(value: string) {
+  return value.replace(/\s*#shorts\b/gi, " ").replace(/\s{2,}/g, " ").trim();
+}
+
+export function shapeForYouTube(input: {
+  title: string;
+  description: string;
+  tags: string[];
+  playlist?: string | null;
+  format: Exclude<VideoLength, "skip">;
+}) {
+  if (input.format === "short") {
+    const suffix = " #Shorts";
+    const base = stripShorts(input.title).slice(0, 100 - suffix.length).trimEnd();
+    const title = `${base}${suffix}`;
+    const description = mentionsShorts(input.description)
+      ? input.description.trim()
+      : `${input.description.trim()}\n\n#Shorts`.trim();
+    const tags = input.tags.some((tag) => tag.toLowerCase() === "shorts") ? input.tags : [...input.tags, "Shorts"];
+    return { title, description, tags, playlist: "YouTube Shorts" };
+  }
+  return {
+    title: stripShorts(input.title).slice(0, 100),
+    description: stripShorts(input.description),
+    tags: input.tags.filter((tag) => tag.toLowerCase() !== "shorts"),
+    playlist: input.playlist?.trim() || null,
+  };
+}
+
 export function fitTags(tags: string[]) {
   const fitted: string[] = [];
   let used = 0;

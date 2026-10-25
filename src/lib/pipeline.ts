@@ -7,7 +7,7 @@ import { downloadDriveFile, listDriveVideos } from "@/lib/google-drive";
 import { generateVideoFingerprint, groupByFingerprint } from "@/lib/deduplicator";
 import { probeDuration, transcodeToMp4, writeThumbnail } from "@/lib/media";
 import { analyzeVideoWithOpenAI } from "@/lib/openai";
-import { uploadToYouTube } from "@/lib/youtube";
+import { uploadToYouTube, classifyDuration, shapeForYouTube } from "@/lib/youtube";
 import { formatInTimeZone } from "date-fns-tz";
 import {
   dayBounds,
@@ -324,6 +324,17 @@ export async function processLibrary() {
       const duration = await writeThumb(video.id, filePath).catch(async () => {
         return probeDuration(filePath).catch(() => 0);
       });
+      const length = classifyDuration(duration);
+      if (length === "skip") {
+        const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
+        await prisma.video.update({
+          where: { id: video.id },
+          data: { status: "excluded", isCanonical: false, scheduledAt: null, localPath: filePath, error: message },
+        });
+        await logUpload(video.id, "skip", message);
+        debug("process", "skipped, under 10 seconds", { video: video.name, seconds: Number(duration.toFixed(1)) });
+        continue;
+      }
       const fingerprint = await generateVideoFingerprint(filePath, duration);
       await prisma.video.update({
         where: { id: video.id },
@@ -376,28 +387,54 @@ export async function processLibrary() {
       });
       const fresh = await prisma.video.findUniqueOrThrow({ where: { id: video.id } });
       const filePath = await ensureLocalFile(fresh);
+      const duration = await probeDuration(filePath).catch(() => 0);
+      const length = classifyDuration(duration);
+      if (length === "skip") {
+        const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
+        await prisma.video.update({
+          where: { id: video.id },
+          data: { status: "excluded", isCanonical: false, scheduledAt: null, error: message },
+        });
+        await logUpload(video.id, "skip", message);
+        debug("process", "skipped before title, under 10 seconds", { video: video.name, seconds: Number(duration.toFixed(1)) });
+        continue;
+      }
       const seo = await analyzeVideoWithOpenAI(filePath, {
         apiKey: settings.openaiApiKey,
         model: settings.openaiModel,
         prompt: settings.openaiPrompt,
       });
+      const shaped = shapeForYouTube({
+        title: seo.title,
+        description: seo.description,
+        tags: seo.tags,
+        playlist: seo.playlist,
+        format: length,
+      });
       await prisma.video.update({
         where: { id: video.id },
         data: {
           status: "ready",
-          title: seo.title,
-          description: seo.description,
-          tags: JSON.stringify(seo.tags),
+          title: shaped.title,
+          description: shaped.description,
+          tags: JSON.stringify(shaped.tags),
           category: seo.category,
-          playlist: seo.playlist,
+          playlist: shaped.playlist,
           shortSummary: seo.shortSummary,
           localPath: filePath,
           error: null,
         },
       });
-      await logUpload(video.id, "analyze", seo.title);
+      await logUpload(video.id, "analyze", `${length === "short" ? "YouTube Short" : "Normal video"}: ${shaped.title}`);
       analyzed += 1;
-      debug("process", "ready for a slot", { video: video.name, status: "ready", inQueue: true, scheduled: false, title: seo.title });
+      debug("process", length === "short" ? "ready as short" : "ready as normal video", {
+        video: video.name,
+        status: "ready",
+        inQueue: true,
+        scheduled: false,
+        seconds: Number(duration.toFixed(1)),
+        title: shaped.title,
+      });
     } catch (error) {
       const message = errorMessage(error);
       errors.push({ id: video.id, name: video.name, message });
@@ -518,23 +555,47 @@ export async function uploadDueVideos() {
     try {
       const fresh = await prisma.video.findUniqueOrThrow({ where: { id: video.id } });
       const filePath = await ensureLocalFile(fresh);
+      const duration = await probeDuration(filePath).catch(() => 0);
+      const length = classifyDuration(duration);
+      if (length === "skip") {
+        const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
+        await prisma.video.update({
+          where: { id: fresh.id },
+          data: { status: "excluded", isCanonical: false, scheduledAt: null, error: message },
+        });
+        await logUpload(fresh.id, "skip", message);
+        usedToday -= 1;
+        skipped += 1;
+        debug("upload", "skipped, under 10 seconds", { video: fresh.name, seconds: Number(duration.toFixed(1)) });
+        continue;
+      }
       const privacy = asPrivacy(fresh.privacyStatus, settings.privacyDefault);
-      const tags = parseTags(fresh.tags);
-      const result = await uploadToYouTube({
-        videoPath: filePath,
+      const shaped = shapeForYouTube({
         title: fresh.title || fresh.name,
         description: fresh.description || "",
-        tags,
+        tags: parseTags(fresh.tags),
+        playlist: fresh.playlist,
+        format: length,
+      });
+      const result = await uploadToYouTube({
+        videoPath: filePath,
+        title: shaped.title,
+        description: shaped.description,
+        tags: shaped.tags,
         categoryId: settings.categoryId,
         privacy,
         scheduledAt: fresh.scheduledAt,
         madeForKids: settings.madeForKids,
-        playlist: fresh.playlist,
+        playlist: shaped.playlist,
       });
       await prisma.video.update({
         where: { id: fresh.id },
         data: {
           status: "uploaded",
+          title: shaped.title,
+          description: shaped.description,
+          tags: JSON.stringify(shaped.tags),
+          playlist: shaped.playlist,
           youtubeVideoId: result.id,
           uploadedAt: new Date(),
           localPath: filePath,
@@ -544,12 +605,10 @@ export async function uploadDueVideos() {
       await logUpload(
         fresh.id,
         "upload",
-        result.playlistWarning
-          ? `YouTube id ${result.id}. Playlist was not updated: ${result.playlistWarning}`
-          : `YouTube id ${result.id}`,
+        `${length === "short" ? "YouTube Short" : "Normal video"}. YouTube id ${result.id}.${result.playlistWarning ? ` Playlist was not updated: ${result.playlistWarning}` : ""}`,
       );
       uploaded += 1;
-      debug("upload", "uploaded", {
+      debug("upload", length === "short" ? "uploaded as short" : "uploaded as normal video", {
         video: fresh.name,
         status: "uploaded",
         inQueue: false,
@@ -582,136 +641,173 @@ export async function uploadDueVideos() {
 /** Download, title, and publish the next queued video immediately. */
 export async function uploadNextVideo() {
   const settings = await getResolvedSettings();
-  const next = await prisma.video.findFirst({
-    where: {
-      isCanonical: true,
-      status: { notIn: ["uploaded", "uploading", "duplicate", "excluded"] },
-    },
-    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
-  });
-  if (!next) {
-    debug("upload-now", "no video waiting");
-    throw new Error("No video is waiting. Sync the Drive folder, then try again.");
-  }
+  let skippedShort = 0;
 
-  debug("upload-now", "picked next video", { video: next.name, status: next.status, sortOrder: next.sortOrder });
-  const claimed = await prisma.video.updateMany({
-    where: { id: next.id, status: next.status },
-    data: { status: "uploading", error: null },
-  });
-  if (claimed.count === 0) {
-    throw new Error("That video was already taken by another upload.");
-  }
+  while (skippedShort <= 25) {
+    const next = await prisma.video.findFirst({
+      where: {
+        isCanonical: true,
+        status: { notIn: ["uploaded", "uploading", "duplicate", "excluded"] },
+      },
+      orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    });
+    if (!next) {
+      debug("upload-now", "no video waiting", { skippedShort });
+      if (skippedShort > 0) {
+        throw new Error(`Skipped ${skippedShort} videos under 10 seconds. No longer video is waiting.`);
+      }
+      throw new Error("No video is waiting. Sync the Drive folder, then try again.");
+    }
 
-  try {
-    let current = await prisma.video.findUniqueOrThrow({ where: { id: next.id } });
-    const filePath = await ensureLocalFile(current);
-    debug("upload-now", "file ready", { video: current.name, path: filePath });
+    debug("upload-now", "picked next video", { video: next.name, status: next.status, sortOrder: next.sortOrder });
+    const claimed = await prisma.video.updateMany({
+      where: { id: next.id, status: next.status },
+      data: { status: "uploading", error: null },
+    });
+    if (claimed.count === 0) {
+      throw new Error("That video was already taken by another upload.");
+    }
 
-    if (!current.fingerprint) {
+    try {
+      let current = await prisma.video.findUniqueOrThrow({ where: { id: next.id } });
+      const filePath = await ensureLocalFile(current);
+      debug("upload-now", "file ready", { video: current.name, path: filePath });
+
       const duration = await writeThumb(current.id, filePath).catch(async () => probeDuration(filePath).catch(() => 0));
-      const fingerprint = await generateVideoFingerprint(filePath, duration);
-      await prisma.video.update({
-        where: { id: current.id },
-        data: { fingerprint, localPath: filePath, status: "uploading" },
-      });
-      await clusterVideos();
-      current = await prisma.video.findUniqueOrThrow({ where: { id: next.id } });
-      if (!current.isCanonical || current.status === "duplicate") {
+      const length = classifyDuration(duration);
+      if (length === "skip") {
+        const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
         await prisma.video.update({
           where: { id: current.id },
-          data: {
-            status: "duplicate",
-            isCanonical: false,
-            error: "This copy matches another video, so it was not uploaded.",
-          },
+          data: { status: "excluded", isCanonical: false, scheduledAt: null, localPath: filePath, error: message },
         });
-        throw new Error(`${current.name} matches another video, so it was not uploaded.`);
+        await logUpload(current.id, "skip", message);
+        skippedShort += 1;
+        debug("upload-now", "skipped, under 10 seconds", { video: current.name, seconds: Number(duration.toFixed(1)) });
+        continue;
       }
-    }
 
-    if (!settings.openaiApiKey) throw new Error("OpenAI API key is not configured.");
-    debug("upload-now", "writing title, description, and tags", { video: current.name, model: settings.openaiModel });
-    const seo = await analyzeVideoWithOpenAI(filePath, {
-      apiKey: settings.openaiApiKey,
-      model: settings.openaiModel,
-      prompt: settings.openaiPrompt,
-    });
-    current = await prisma.video.update({
-      where: { id: current.id },
-      data: {
-        status: "uploading",
+      if (!current.fingerprint) {
+        const fingerprint = await generateVideoFingerprint(filePath, duration);
+        await prisma.video.update({
+          where: { id: current.id },
+          data: { fingerprint, localPath: filePath, status: "uploading" },
+        });
+        await clusterVideos();
+        current = await prisma.video.findUniqueOrThrow({ where: { id: next.id } });
+        if (!current.isCanonical || current.status === "duplicate") {
+          await prisma.video.update({
+            where: { id: current.id },
+            data: {
+              status: "duplicate",
+              isCanonical: false,
+              error: "This copy matches another video, so it was not uploaded.",
+            },
+          });
+          throw new Error(`${current.name} matches another video, so it was not uploaded.`);
+        }
+      }
+
+      if (!settings.openaiApiKey) throw new Error("OpenAI API key is not configured.");
+      debug("upload-now", length === "short" ? "writing a Short" : "writing a normal video", {
+        video: current.name,
+        model: settings.openaiModel,
+        seconds: Number(duration.toFixed(1)),
+      });
+      const seo = await analyzeVideoWithOpenAI(filePath, {
+        apiKey: settings.openaiApiKey,
+        model: settings.openaiModel,
+        prompt: settings.openaiPrompt,
+      });
+      const shaped = shapeForYouTube({
         title: seo.title,
         description: seo.description,
-        tags: JSON.stringify(seo.tags),
-        category: seo.category,
+        tags: seo.tags,
         playlist: seo.playlist,
-        shortSummary: seo.shortSummary,
-        privacyStatus: "public",
-        scheduledAt: null,
-        localPath: filePath,
-        error: null,
-      },
-    });
-
-    debug("upload-now", "publishing immediately, scheduler skipped", {
-      video: current.name,
-      title: current.title,
-      privacy: "public",
-    });
-    const result = await uploadToYouTube({
-      videoPath: filePath,
-      title: current.title || current.name,
-      description: current.description || "",
-      tags: parseTags(current.tags),
-      categoryId: settings.categoryId,
-      privacy: "public",
-      scheduledAt: null,
-      madeForKids: settings.madeForKids,
-      playlist: current.playlist,
-    });
-    await prisma.video.update({
-      where: { id: current.id },
-      data: {
-        status: "uploaded",
-        privacyStatus: "public",
-        scheduledAt: null,
-        youtubeVideoId: result.id,
-        uploadedAt: new Date(),
-        localPath: filePath,
-        error: result.playlistWarning ? result.playlistWarning.slice(0, 1000) : null,
-      },
-    });
-    await logUpload(
-      current.id,
-      "upload",
-      result.playlistWarning
-        ? `Upload now. YouTube id ${result.id}. Playlist was not updated: ${result.playlistWarning}`
-        : `Upload now. YouTube id ${result.id}`,
-    );
-    debug("upload-now", "uploaded", { video: current.name, youtubeId: result.id, title: current.title });
-    return {
-      name: current.name,
-      title: current.title || current.name,
-      youtubeVideoId: result.id,
-      playlistWarning: result.playlistWarning || null,
-      message: result.playlistWarning
-        ? `Uploaded ${current.title || current.name}. Playlist was not updated.`
-        : `Uploaded ${current.title || current.name}.`,
-    };
-  } catch (error) {
-    const message = errorMessage(error);
-    const latest = await prisma.video.findUnique({ where: { id: next.id } });
-    if (latest && latest.status !== "duplicate" && latest.status !== "uploaded") {
-      await prisma.video.update({
-        where: { id: next.id },
-        data: { status: "failed", error: message.slice(0, 1000) },
+        format: length,
       });
-      await logUpload(next.id, "error", message);
+      current = await prisma.video.update({
+        where: { id: current.id },
+        data: {
+          status: "uploading",
+          title: shaped.title,
+          description: shaped.description,
+          tags: JSON.stringify(shaped.tags),
+          category: seo.category,
+          playlist: shaped.playlist,
+          shortSummary: seo.shortSummary,
+          privacyStatus: "public",
+          scheduledAt: null,
+          localPath: filePath,
+          error: null,
+        },
+      });
+
+      debug("upload-now", length === "short" ? "publishing as a YouTube Short" : "publishing as a normal video", {
+        video: current.name,
+        title: current.title,
+        playlist: shaped.playlist,
+        privacy: "public",
+      });
+      const result = await uploadToYouTube({
+        videoPath: filePath,
+        title: shaped.title,
+        description: shaped.description,
+        tags: shaped.tags,
+        categoryId: settings.categoryId,
+        privacy: "public",
+        scheduledAt: null,
+        madeForKids: settings.madeForKids,
+        playlist: shaped.playlist,
+      });
+      await prisma.video.update({
+        where: { id: current.id },
+        data: {
+          status: "uploaded",
+          privacyStatus: "public",
+          scheduledAt: null,
+          youtubeVideoId: result.id,
+          uploadedAt: new Date(),
+          localPath: filePath,
+          error: result.playlistWarning ? result.playlistWarning.slice(0, 1000) : null,
+        },
+      });
+      const destination = length === "short" ? "YouTube Short" : "normal video";
+      await logUpload(
+        current.id,
+        "upload",
+        result.playlistWarning
+          ? `Upload now. ${destination}. YouTube id ${result.id}. Playlist was not updated: ${result.playlistWarning}`
+          : `Upload now. ${destination}. YouTube id ${result.id}`,
+      );
+      debug("upload-now", "uploaded", { video: current.name, youtubeId: result.id, title: current.title, destination });
+      const title = current.title || current.name;
+      const skippedNote = skippedShort > 0 ? ` Skipped ${skippedShort} clip${skippedShort === 1 ? "" : "s"} under 10 seconds.` : "";
+      return {
+        name: current.name,
+        title,
+        youtubeVideoId: result.id,
+        playlistWarning: result.playlistWarning || null,
+        message: result.playlistWarning
+          ? `Uploaded ${title} as a ${destination}. Playlist was not updated.${skippedNote}`
+          : `Uploaded ${title} as a ${destination}.${skippedNote}`,
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      const latest = await prisma.video.findUnique({ where: { id: next.id } });
+      if (latest && latest.status !== "duplicate" && latest.status !== "uploaded" && latest.status !== "excluded") {
+        await prisma.video.update({
+          where: { id: next.id },
+          data: { status: "failed", error: message.slice(0, 1000) },
+        });
+        await logUpload(next.id, "error", message);
+      }
+      debugError("upload-now", "failed", { video: next.name, error: message });
+      throw error;
     }
-    debugError("upload-now", "failed", { video: next.name, error: message });
-    throw error;
   }
+
+  throw new Error(`Skipped ${skippedShort} videos under 10 seconds. Click Upload now again for the next longer video.`);
 }
 
 export async function promoteVideo(id: string) {
