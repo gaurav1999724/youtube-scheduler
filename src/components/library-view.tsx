@@ -41,7 +41,14 @@ export function LibraryView() {
         toast.success(`Drive sync found ${String(result.total ?? 0)} videos.`);
       } else {
         const errors = Array.isArray(result.errors) ? result.errors.length : 0;
-        toast.success(errors ? `Processed with ${errors} errors.` : "Library processed.");
+        const remaining = Number(result.remaining ?? 0);
+        toast.success(
+          errors
+            ? `Processed with ${errors} errors.`
+            : remaining > 0
+              ? `Processed a batch. ${remaining} videos still need processing.`
+              : "Library processed.",
+        );
       }
       await load();
     } catch (error) {

@@ -202,6 +202,9 @@ export async function processLibrary() {
   const errors: { id: string; name: string; message: string }[] = [];
   let hashed = 0;
   let analyzed = 0;
+  const started = Date.now();
+  const budgetMs = process.env.VERCEL ? 45_000 : 0;
+  const outOfTime = () => budgetMs > 0 && Date.now() - started > budgetMs;
 
   const pendingHash = await prisma.video.findMany({
     where: {
@@ -212,6 +215,7 @@ export async function processLibrary() {
   });
 
   for (const video of pendingHash) {
+    if (outOfTime()) break;
     try {
       await prisma.video.update({
         where: { id: video.id },
@@ -251,6 +255,7 @@ export async function processLibrary() {
   });
 
   for (const video of pendingAnalysis) {
+    if (outOfTime()) break;
     try {
       if (!settings.geminiApiKey) {
         throw new Error("Gemini API key is not configured.");
@@ -295,7 +300,13 @@ export async function processLibrary() {
   }
 
   const scheduled = await assignSlots();
-  return { hashed, duplicates, analyzed, scheduled, errors };
+  const remaining = await prisma.video.count({
+    where: {
+      isCanonical: true,
+      status: { in: ["discovered", "failed", "hashing", "analyzing"] },
+    },
+  });
+  return { hashed, duplicates, analyzed, scheduled, remaining, errors };
 }
 
 function asPrivacy(value: string | null | undefined, fallback: PrivacyStatus): PrivacyStatus {

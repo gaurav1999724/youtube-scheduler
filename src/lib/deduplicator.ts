@@ -1,10 +1,11 @@
 import { spawn } from "child_process";
+import { ffmpegPath } from "@/lib/ffmpeg-bin";
 
 export const DUPLICATE_HAMMING_THRESHOLD = 18;
 
 function runFfmpeg(args: string[]): Promise<Buffer> {
   return new Promise((resolve, reject) => {
-    const proc = spawn("ffmpeg", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const proc = spawn(ffmpegPath(), args, { stdio: ["ignore", "pipe", "pipe"] });
     const chunks: Buffer[] = [];
     let stderr = "";
     proc.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));

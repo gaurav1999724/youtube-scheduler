@@ -1,7 +1,16 @@
 import fs from "fs";
+import os from "os";
 import path from "path";
 
-export const STORAGE_ROOT = path.join(process.cwd(), "storage");
+function storageRoot() {
+  const override = process.env.STORAGE_ROOT?.trim();
+  if (override) return override;
+  // Vercel can only write under /tmp. The deploy directory (/var/task) is read-only.
+  if (process.env.VERCEL) return path.join(os.tmpdir(), "autotube");
+  return path.join(process.cwd(), "storage");
+}
+
+export const STORAGE_ROOT = storageRoot();
 export const VIDEO_DIR = path.join(STORAGE_ROOT, "videos");
 export const THUMB_DIR = path.join(STORAGE_ROOT, "thumbs");
 

@@ -1,6 +1,10 @@
+import { spawn } from "child_process";
 import ffmpeg from "fluent-ffmpeg";
 import fs from "fs";
 import path from "path";
+import { configureFfmpeg, ffmpegPath } from "@/lib/ffmpeg-bin";
+
+configureFfmpeg();
 
 function finish(command: ffmpeg.FfmpegCommand): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -10,12 +14,22 @@ function finish(command: ffmpeg.FfmpegCommand): Promise<void> {
 
 export function probeDuration(videoPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    ffmpeg.ffprobe(videoPath, (error, data) => {
-      if (error) {
-        reject(error);
+    const proc = spawn(ffmpegPath(), ["-i", videoPath, "-f", "null", "-"], {
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    proc.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+      if (stderr.length > 12000) stderr = stderr.slice(-12000);
+    });
+    proc.on("error", reject);
+    proc.on("close", () => {
+      const match = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
+      if (!match) {
+        reject(new Error("Could not read the video duration."));
         return;
       }
-      resolve(Number(data.format.duration || 0));
+      resolve(Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]));
     });
   });
 }

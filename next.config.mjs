@@ -7,7 +7,13 @@ const nextConfig = {
       "@google/genai",
       "googleapis",
       "google-auth-library",
+      "ffmpeg-static",
     ],
+    outputFileTracingIncludes: {
+      "/api/videos/process": ["./node_modules/ffmpeg-static/ffmpeg"],
+      "/api/videos/[id]": ["./node_modules/ffmpeg-static/ffmpeg"],
+      "/api/scheduler/run": ["./node_modules/ffmpeg-static/ffmpeg"],
+    },
   },
 };
 
