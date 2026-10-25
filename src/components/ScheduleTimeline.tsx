@@ -64,7 +64,9 @@ function SortableRow({ video, timezone }: { video: VideoDTO; timezone: string })
   const style = { transform: CSS.Transform.toString(transform), transition };
   const when = video.scheduledAt
     ? formatInTimeZone(new Date(video.scheduledAt), timezone, "EEE d MMM · h:mm a")
-    : "Waiting for a slot";
+    : video.status === "ready"
+      ? "Waiting for a slot"
+      : "Not scheduled. A clock time stays empty until processing gives this video a title.";
   return (
     <div
       ref={setNodeRef}
@@ -101,6 +103,7 @@ export function ScheduleTimeline({
   onPickedDate,
   onEditDay,
   onReorder,
+  waitingCount = 0,
 }: {
   queue: VideoDTO[];
   calendar: VideoDTO[];
@@ -111,6 +114,7 @@ export function ScheduleTimeline({
   onPickedDate: (date: string) => void;
   onEditDay: (date: string) => void;
   onReorder: (ids: string[]) => void;
+  waitingCount?: number;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const days = visibleDays(timezone, plans);
@@ -131,12 +135,17 @@ export function ScheduleTimeline({
         <h2 className="text-sm font-medium uppercase tracking-[0.16em] text-muted-foreground">Queue</h2>
         {queue.length === 0 ? (
           <p className="rounded-xl border border-dashed border-border px-4 py-8 text-sm text-muted-foreground">
-            Unique videos appear here after Gemini writes their titles.
+            No video is on a clock time yet. Sync the Drive folder, then process the library. A saved time such as 12:32 PM stays open until a video has a title.
           </p>
         ) : (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={queue.map((video) => video.id)} strategy={verticalListSortingStrategy}>
               <div className="space-y-2">
+                {waitingCount > queue.length ? (
+                  <p className="text-xs text-muted-foreground">
+                    Showing {queue.length} of {waitingCount} videos still waiting to be processed. They are not placed on a clock time until a title is written.
+                  </p>
+                ) : null}
                 {queue.map((video) => (
                   <SortableRow key={video.id} video={video} timezone={timezone} />
                 ))}

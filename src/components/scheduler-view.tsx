@@ -8,7 +8,8 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api-client";
 import type { VideoDTO } from "@/lib/types";
 
-const QUEUE_STATUSES = new Set(["ready", "scheduled", "uploading", "failed"]);
+const PLACED_STATUSES = new Set(["ready", "scheduled", "uploading", "failed"]);
+const WAITING_STATUSES = new Set(["discovered", "hashing", "analyzing"]);
 
 export function SchedulerView() {
   const [videos, setVideos] = useState<VideoDTO[]>([]);
@@ -38,7 +39,9 @@ export function SchedulerView() {
       .finally(() => setLoading(false));
   }, []);
 
-  const queue = videos.filter((video) => video.isCanonical && QUEUE_STATUSES.has(video.status));
+  const placed = videos.filter((video) => video.isCanonical && PLACED_STATUSES.has(video.status));
+  const waiting = videos.filter((video) => video.isCanonical && WAITING_STATUSES.has(video.status));
+  const queue = placed.length > 0 ? placed : waiting.slice(0, 12);
   const calendar = videos.filter((video) => video.scheduledAt || video.uploadedAt);
 
   async function reorder(ids: string[]) {
@@ -123,7 +126,7 @@ export function SchedulerView() {
           <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">Scheduler</p>
           <h1 className="mt-1 text-3xl font-semibold tracking-tight">Daily slots</h1>
           <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-            Pick any date and choose how many uploads that day should have, plus the clock time for each one. Days without a custom plan keep the everyday times from Settings. Drag the queue to change which video takes the next slot. Keep <span className="font-mono text-foreground">npm run worker</span> running.
+            Pick any date and choose how many uploads that day should have, plus the clock time for each one. Days without a custom plan keep the everyday times from Settings. A video is placed on that time only after it is processed. Drag the queue to change which video takes the next slot.
           </p>
         </div>
         <Button variant="outline" disabled={busy} onClick={runDue}>
@@ -140,6 +143,7 @@ export function SchedulerView() {
         onPickedDate={setPickedDate}
         onEditDay={openDay}
         onReorder={reorder}
+        waitingCount={placed.length === 0 ? waiting.length : 0}
       />
       <DayPlanEditor draft={draft} busy={savingPlan} onClose={() => setDraft(null)} onSave={saveDay} onReset={resetDay} />
     </div>
