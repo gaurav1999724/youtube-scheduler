@@ -580,6 +580,137 @@ export async function uploadDueVideos() {
   return { uploaded, failed, skipped };
 }
 
+/** Download, title, and publish the next queued video immediately. */
+export async function uploadNextVideo() {
+  const settings = await getResolvedSettings();
+  const next = await prisma.video.findFirst({
+    where: {
+      isCanonical: true,
+      status: { notIn: ["uploaded", "uploading", "duplicate", "excluded"] },
+    },
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+  });
+  if (!next) {
+    debug("upload-now", "no video waiting");
+    throw new Error("No video is waiting. Sync the Drive folder, then try again.");
+  }
+
+  debug("upload-now", "picked next video", { video: next.name, status: next.status, sortOrder: next.sortOrder });
+  const claimed = await prisma.video.updateMany({
+    where: { id: next.id, status: next.status },
+    data: { status: "uploading", error: null },
+  });
+  if (claimed.count === 0) {
+    throw new Error("That video was already taken by another upload.");
+  }
+
+  try {
+    let current = await prisma.video.findUniqueOrThrow({ where: { id: next.id } });
+    const filePath = await ensureLocalFile(current);
+    debug("upload-now", "file ready", { video: current.name, path: filePath });
+
+    if (!current.fingerprint) {
+      const duration = await writeThumb(current.id, filePath).catch(async () => probeDuration(filePath).catch(() => 0));
+      const fingerprint = await generateVideoFingerprint(filePath, duration);
+      await prisma.video.update({
+        where: { id: current.id },
+        data: { fingerprint, localPath: filePath, status: "uploading" },
+      });
+      await clusterVideos();
+      current = await prisma.video.findUniqueOrThrow({ where: { id: next.id } });
+      if (!current.isCanonical || current.status === "duplicate") {
+        await prisma.video.update({
+          where: { id: current.id },
+          data: {
+            status: "duplicate",
+            isCanonical: false,
+            error: "This copy matches another video, so it was not uploaded.",
+          },
+        });
+        throw new Error(`${current.name} matches another video, so it was not uploaded.`);
+      }
+    }
+
+    if (!current.title) {
+      if (!settings.geminiApiKey) throw new Error("Gemini API key is not configured.");
+      debug("upload-now", "writing title", { video: current.name });
+      const seo = await analyzeVideoWithGemini(filePath, {
+        mimeType: filePath.endsWith(".mp4") ? "video/mp4" : current.mimeType,
+        apiKey: settings.geminiApiKey,
+        model: settings.geminiModel,
+        prompt: settings.geminiPrompt,
+      });
+      current = await prisma.video.update({
+        where: { id: current.id },
+        data: {
+          status: "uploading",
+          title: seo.title,
+          description: seo.description,
+          tags: JSON.stringify(seo.tags),
+          category: seo.category,
+          playlist: seo.playlist,
+          shortSummary: seo.shortSummary,
+          localPath: filePath,
+          error: null,
+        },
+      });
+    }
+
+    const privacy = asPrivacy(current.privacyStatus, settings.privacyDefault);
+    debug("upload-now", "uploading", { video: current.name, title: current.title, privacy });
+    const result = await uploadToYouTube({
+      videoPath: filePath,
+      title: current.title || current.name,
+      description: current.description || "",
+      tags: parseTags(current.tags),
+      categoryId: settings.categoryId,
+      privacy,
+      scheduledAt: null,
+      madeForKids: settings.madeForKids,
+      playlist: current.playlist,
+    });
+    await prisma.video.update({
+      where: { id: current.id },
+      data: {
+        status: "uploaded",
+        youtubeVideoId: result.id,
+        uploadedAt: new Date(),
+        localPath: filePath,
+        error: result.playlistWarning ? result.playlistWarning.slice(0, 1000) : null,
+      },
+    });
+    await logUpload(
+      current.id,
+      "upload",
+      result.playlistWarning
+        ? `Upload now. YouTube id ${result.id}. Playlist was not updated: ${result.playlistWarning}`
+        : `Upload now. YouTube id ${result.id}`,
+    );
+    debug("upload-now", "uploaded", { video: current.name, youtubeId: result.id, title: current.title });
+    return {
+      name: current.name,
+      title: current.title || current.name,
+      youtubeVideoId: result.id,
+      playlistWarning: result.playlistWarning || null,
+      message: result.playlistWarning
+        ? `Uploaded ${current.title || current.name}. Playlist was not updated.`
+        : `Uploaded ${current.title || current.name}.`,
+    };
+  } catch (error) {
+    const message = errorMessage(error);
+    const latest = await prisma.video.findUnique({ where: { id: next.id } });
+    if (latest && latest.status !== "duplicate" && latest.status !== "uploaded") {
+      await prisma.video.update({
+        where: { id: next.id },
+        data: { status: "failed", error: message.slice(0, 1000) },
+      });
+      await logUpload(next.id, "error", message);
+    }
+    debugError("upload-now", "failed", { video: next.name, error: message });
+    throw error;
+  }
+}
+
 export async function promoteVideo(id: string) {
   const video = await prisma.video.findUnique({ where: { id } });
   if (!video) throw new Error("Video not found.");

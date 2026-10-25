@@ -63,6 +63,7 @@ export function SettingsView() {
   const [form, setForm] = useState<FormState | null>(null);
   const [flags, setFlags] = useState({ secret: false, token: false, account: false, gemini: false, connected: false, channelTitle: "" });
   const [saving, setSaving] = useState(false);
+  const [uploading, setUploading] = useState(false);
 
   async function load() {
     const data = await api<{ settings: PublicSettings }>("/api/settings");
@@ -111,6 +112,18 @@ export function SettingsView() {
       toast.error(error instanceof Error ? error.message : "Could not save settings");
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function uploadNow() {
+    setUploading(true);
+    try {
+      const result = await api<{ message: string }>("/api/videos/upload-next", { method: "POST" });
+      toast.success(result.message);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Upload failed");
+    } finally {
+      setUploading(false);
     }
   }
 
@@ -307,7 +320,17 @@ export function SettingsView() {
           </Card>
         </TabsContent>
       </Tabs>
-      <Button onClick={save} disabled={saving || Boolean(folderError)}>{saving ? "Saving…" : "Save settings"}</Button>
+      <div className="flex flex-wrap gap-2">
+        <Button onClick={save} disabled={saving || uploading || Boolean(folderError)}>
+          {saving ? "Saving…" : "Save settings"}
+        </Button>
+        <Button variant="outline" onClick={uploadNow} disabled={saving || uploading}>
+          {uploading ? "Uploading…" : "Upload now"}
+        </Button>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Upload now takes the next video in the queue, writes the title, and publishes it with the same YouTube settings. It does not wait for the clock time.
+      </p>
     </div>
   );
 }
