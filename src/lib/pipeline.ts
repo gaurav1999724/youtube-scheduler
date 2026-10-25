@@ -631,40 +631,43 @@ export async function uploadNextVideo() {
       }
     }
 
-    if (!current.title) {
-      if (!settings.geminiApiKey) throw new Error("Gemini API key is not configured.");
-      debug("upload-now", "writing title", { video: current.name });
-      const seo = await analyzeVideoWithGemini(filePath, {
-        mimeType: filePath.endsWith(".mp4") ? "video/mp4" : current.mimeType,
-        apiKey: settings.geminiApiKey,
-        model: settings.geminiModel,
-        prompt: settings.geminiPrompt,
-      });
-      current = await prisma.video.update({
-        where: { id: current.id },
-        data: {
-          status: "uploading",
-          title: seo.title,
-          description: seo.description,
-          tags: JSON.stringify(seo.tags),
-          category: seo.category,
-          playlist: seo.playlist,
-          shortSummary: seo.shortSummary,
-          localPath: filePath,
-          error: null,
-        },
-      });
-    }
+    if (!settings.geminiApiKey) throw new Error("Gemini API key is not configured.");
+    debug("upload-now", "writing title, description, and tags", { video: current.name });
+    const seo = await analyzeVideoWithGemini(filePath, {
+      mimeType: filePath.endsWith(".mp4") ? "video/mp4" : current.mimeType,
+      apiKey: settings.geminiApiKey,
+      model: settings.geminiModel,
+      prompt: settings.geminiPrompt,
+    });
+    current = await prisma.video.update({
+      where: { id: current.id },
+      data: {
+        status: "uploading",
+        title: seo.title,
+        description: seo.description,
+        tags: JSON.stringify(seo.tags),
+        category: seo.category,
+        playlist: seo.playlist,
+        shortSummary: seo.shortSummary,
+        privacyStatus: "public",
+        scheduledAt: null,
+        localPath: filePath,
+        error: null,
+      },
+    });
 
-    const privacy = asPrivacy(current.privacyStatus, settings.privacyDefault);
-    debug("upload-now", "uploading", { video: current.name, title: current.title, privacy });
+    debug("upload-now", "publishing immediately, scheduler skipped", {
+      video: current.name,
+      title: current.title,
+      privacy: "public",
+    });
     const result = await uploadToYouTube({
       videoPath: filePath,
       title: current.title || current.name,
       description: current.description || "",
       tags: parseTags(current.tags),
       categoryId: settings.categoryId,
-      privacy,
+      privacy: "public",
       scheduledAt: null,
       madeForKids: settings.madeForKids,
       playlist: current.playlist,
@@ -673,6 +676,8 @@ export async function uploadNextVideo() {
       where: { id: current.id },
       data: {
         status: "uploaded",
+        privacyStatus: "public",
+        scheduledAt: null,
         youtubeVideoId: result.id,
         uploadedAt: new Date(),
         localPath: filePath,

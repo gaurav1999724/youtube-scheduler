@@ -138,14 +138,22 @@ export function SettingsView() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">Settings</p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">Channel and API</h1>
-        <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Secrets are write-only. Leave a field blank to keep the saved value. Register the redirect{" "}
-          <span className="font-mono text-foreground">http://localhost:3000/api/auth/google/callback</span>.
-        </p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">Settings</p>
+          <h1 className="mt-1 text-3xl font-semibold tracking-tight">Channel and API</h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
+            Secrets are write-only. Leave a field blank to keep the saved value. Register the redirect{" "}
+            <span className="font-mono text-foreground">http://localhost:3000/api/auth/google/callback</span>.
+          </p>
+        </div>
+        <Button onClick={uploadNow} disabled={uploading}>
+          {uploading ? "Uploading…" : "Upload now"}
+        </Button>
       </div>
+      <p className="text-sm text-muted-foreground">
+        Upload now ignores the scheduler. It takes the next video, asks Gemini for the title, description, and tags, and publishes that video on YouTube immediately.
+      </p>
       <Tabs defaultValue="drive">
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="drive">Drive</TabsTrigger>
@@ -320,17 +328,9 @@ export function SettingsView() {
           </Card>
         </TabsContent>
       </Tabs>
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={save} disabled={saving || uploading || Boolean(folderError)}>
-          {saving ? "Saving…" : "Save settings"}
-        </Button>
-        <Button variant="outline" onClick={uploadNow} disabled={saving || uploading}>
-          {uploading ? "Uploading…" : "Upload now"}
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Upload now takes the next video in the queue, writes the title, and publishes it with the same YouTube settings. It does not wait for the clock time.
-      </p>
+      <Button onClick={save} disabled={saving || uploading || Boolean(folderError)}>
+        {saving ? "Saving…" : "Save settings"}
+      </Button>
     </div>
   );
 }
