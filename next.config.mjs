@@ -4,7 +4,6 @@ const nextConfig = {
     serverComponentsExternalPackages: [
       "@prisma/client",
       "fluent-ffmpeg",
-      "@google/genai",
       "googleapis",
       "google-auth-library",
       "ffmpeg-static",

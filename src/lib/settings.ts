@@ -3,8 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { parseDriveFolderId } from "@/lib/drive-link";
 import {
   DEFAULT_DRIVE_FOLDER_ID,
-  DEFAULT_GEMINI_MODEL,
-  DEFAULT_GEMINI_PROMPT,
+  DEFAULT_OPENAI_MODEL,
+  DEFAULT_OPENAI_PROMPT,
   type DriveAuthMode,
   type PrivacyStatus,
   type PublicSettings,
@@ -19,9 +19,9 @@ export type ResolvedSettings = {
   serviceAccountJson: string;
   driveAuthMode: DriveAuthMode;
   driveFolderId: string;
-  geminiApiKey: string;
-  geminiModel: string;
-  geminiPrompt: string;
+  openaiApiKey: string;
+  openaiModel: string;
+  openaiPrompt: string;
   dailyUploadCount: number;
   uploadTimes: string;
   timezone: string;
@@ -43,6 +43,20 @@ function prefer(dbValue: string | null | undefined, envValue: string | undefined
   const fromDb = dbValue?.trim();
   if (fromDb) return fromDb;
   return envValue?.trim() || "";
+}
+
+function openAiKey(stored: string | null | undefined) {
+  const fromDb = stored?.trim() || "";
+  const fromEnv = process.env.OPENAI_API_KEY?.trim() || "";
+  if (fromDb.startsWith("sk-")) return fromDb;
+  if (fromEnv.startsWith("sk-")) return fromEnv;
+  return "";
+}
+
+function openAiModel(stored: string | null | undefined) {
+  const model = stored?.trim() || "";
+  if (!model || /^gemini/i.test(model)) return DEFAULT_OPENAI_MODEL;
+  return model;
 }
 
 function resolveFolderId(value: string) {
@@ -73,9 +87,9 @@ export async function ensureSettingsRow() {
       googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || null,
       googleRefreshToken: process.env.GOOGLE_REFRESH_TOKEN || null,
       driveFolderId: resolveFolderId(process.env.DRIVE_FOLDER_ID || DEFAULT_DRIVE_FOLDER_ID),
-      geminiApiKey: process.env.GEMINI_API_KEY || null,
-      geminiModel: DEFAULT_GEMINI_MODEL,
-      geminiPrompt: DEFAULT_GEMINI_PROMPT,
+      geminiApiKey: process.env.OPENAI_API_KEY || null,
+      geminiModel: DEFAULT_OPENAI_MODEL,
+      geminiPrompt: DEFAULT_OPENAI_PROMPT,
       dailyUploadCount: envNumber(process.env.DAILY_UPLOAD_COUNT, 2),
       uploadTimes: process.env.UPLOAD_TIMES || "10:00,18:00",
       timezone: process.env.TIMEZONE || "Asia/Kolkata",
@@ -98,9 +112,9 @@ export async function getResolvedSettings(): Promise<ResolvedSettings> {
     serviceAccountJson: row.serviceAccountJson?.trim() || "",
     driveAuthMode: asDriveMode(row.driveAuthMode),
     driveFolderId: resolveFolderId(prefer(row.driveFolderId, process.env.DRIVE_FOLDER_ID)),
-    geminiApiKey: prefer(row.geminiApiKey, process.env.GEMINI_API_KEY),
-    geminiModel: prefer(row.geminiModel, undefined) || DEFAULT_GEMINI_MODEL,
-    geminiPrompt: row.geminiPrompt?.trim() || DEFAULT_GEMINI_PROMPT,
+    openaiApiKey: openAiKey(row.geminiApiKey),
+    openaiModel: openAiModel(row.geminiModel),
+    openaiPrompt: row.geminiPrompt?.trim() || DEFAULT_OPENAI_PROMPT,
     dailyUploadCount: row.dailyUploadCount || envNumber(process.env.DAILY_UPLOAD_COUNT, 2),
     uploadTimes: prefer(row.uploadTimes, process.env.UPLOAD_TIMES) || "10:00,18:00",
     timezone,
@@ -121,9 +135,9 @@ export function toPublicSettings(settings: ResolvedSettings): PublicSettings {
     hasServiceAccount: Boolean(settings.serviceAccountJson),
     driveAuthMode: settings.driveAuthMode,
     driveFolderId: settings.driveFolderId,
-    hasGeminiKey: Boolean(settings.geminiApiKey),
-    geminiModel: settings.geminiModel,
-    geminiPrompt: settings.geminiPrompt,
+    hasOpenAiKey: Boolean(settings.openaiApiKey),
+    openaiModel: settings.openaiModel,
+    openaiPrompt: settings.openaiPrompt,
     dailyUploadCount: settings.dailyUploadCount,
     uploadTimes: settings.uploadTimes,
     timezone: settings.timezone,
@@ -143,9 +157,9 @@ export type SettingsUpdate = {
   serviceAccountJson?: string;
   driveAuthMode: DriveAuthMode;
   driveFolderId: string;
-  geminiApiKey?: string;
-  geminiModel: string;
-  geminiPrompt: string;
+  openaiApiKey?: string;
+  openaiModel: string;
+  openaiPrompt: string;
   dailyUploadCount: number;
   uploadTimes: string;
   timezone: string;
@@ -187,9 +201,9 @@ export async function updateSettings(input: SettingsUpdate) {
         : {}),
       driveAuthMode: input.driveAuthMode,
       driveFolderId: parseDriveFolderId(input.driveFolderId),
-      ...(input.geminiApiKey?.trim() ? { geminiApiKey: input.geminiApiKey.trim() } : {}),
-      geminiModel: input.geminiModel.trim() || DEFAULT_GEMINI_MODEL,
-      geminiPrompt: input.geminiPrompt.trim(),
+      ...(input.openaiApiKey?.trim() ? { geminiApiKey: input.openaiApiKey.trim() } : {}),
+      geminiModel: openAiModel(input.openaiModel),
+      geminiPrompt: input.openaiPrompt.trim(),
       dailyUploadCount: input.dailyUploadCount,
       uploadTimes: input.uploadTimes.trim(),
       timezone: input.timezone.trim(),

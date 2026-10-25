@@ -15,9 +15,9 @@ const updateSchema = z.object({
   serviceAccountJson: z.string().max(200_000).optional(),
   driveAuthMode: z.enum(["oauth", "service_account"]),
   driveFolderId: z.string().min(8).max(500),
-  geminiApiKey: z.string().max(300).optional(),
-  geminiModel: z.string().min(2).max(80),
-  geminiPrompt: z.string().min(20).max(8000),
+  openaiApiKey: z.string().max(300).optional(),
+  openaiModel: z.string().min(2).max(80),
+  openaiPrompt: z.string().min(20).max(8000),
   dailyUploadCount: z.number().int().min(1).max(12),
   uploadTimes: z
     .string()

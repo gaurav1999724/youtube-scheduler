@@ -6,7 +6,7 @@ import { getResolvedSettings } from "@/lib/settings";
 import { downloadDriveFile, listDriveVideos } from "@/lib/google-drive";
 import { generateVideoFingerprint, groupByFingerprint } from "@/lib/deduplicator";
 import { probeDuration, transcodeToMp4, writeThumbnail } from "@/lib/media";
-import { analyzeVideoWithGemini } from "@/lib/gemini";
+import { analyzeVideoWithOpenAI } from "@/lib/openai";
 import { uploadToYouTube } from "@/lib/youtube";
 import { formatInTimeZone } from "date-fns-tz";
 import {
@@ -365,10 +365,10 @@ export async function processLibrary() {
       });
       break;
     }
-    debug("process", "processing", { video: video.name, stage: "gemini", status: video.status, inQueue: true, scheduled: false });
+    debug("process", "processing", { video: video.name, stage: "openai", status: video.status, inQueue: true, scheduled: false });
     try {
-      if (!settings.geminiApiKey) {
-        throw new Error("Gemini API key is not configured.");
+      if (!settings.openaiApiKey) {
+        throw new Error("OpenAI API key is not configured.");
       }
       await prisma.video.update({
         where: { id: video.id },
@@ -376,11 +376,10 @@ export async function processLibrary() {
       });
       const fresh = await prisma.video.findUniqueOrThrow({ where: { id: video.id } });
       const filePath = await ensureLocalFile(fresh);
-      const seo = await analyzeVideoWithGemini(filePath, {
-        mimeType: filePath.endsWith(".mp4") ? "video/mp4" : fresh.mimeType,
-        apiKey: settings.geminiApiKey,
-        model: settings.geminiModel,
-        prompt: settings.geminiPrompt,
+      const seo = await analyzeVideoWithOpenAI(filePath, {
+        apiKey: settings.openaiApiKey,
+        model: settings.openaiModel,
+        prompt: settings.openaiPrompt,
       });
       await prisma.video.update({
         where: { id: video.id },
@@ -631,13 +630,12 @@ export async function uploadNextVideo() {
       }
     }
 
-    if (!settings.geminiApiKey) throw new Error("Gemini API key is not configured.");
-    debug("upload-now", "writing title, description, and tags", { video: current.name });
-    const seo = await analyzeVideoWithGemini(filePath, {
-      mimeType: filePath.endsWith(".mp4") ? "video/mp4" : current.mimeType,
-      apiKey: settings.geminiApiKey,
-      model: settings.geminiModel,
-      prompt: settings.geminiPrompt,
+    if (!settings.openaiApiKey) throw new Error("OpenAI API key is not configured.");
+    debug("upload-now", "writing title, description, and tags", { video: current.name, model: settings.openaiModel });
+    const seo = await analyzeVideoWithOpenAI(filePath, {
+      apiKey: settings.openaiApiKey,
+      model: settings.openaiModel,
+      prompt: settings.openaiPrompt,
     });
     current = await prisma.video.update({
       where: { id: current.id },

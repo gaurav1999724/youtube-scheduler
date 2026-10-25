@@ -21,7 +21,7 @@ export const metadata: Metadata = {
     default: "AutoTube AI Studio",
     template: "%s · AutoTube",
   },
-  description: "Drive sync, duplicate detection, Gemini SEO, and scheduled YouTube uploads.",
+  description: "Drive sync, duplicate detection, OpenAI SEO, and scheduled YouTube uploads.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {

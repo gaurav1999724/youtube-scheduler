@@ -28,9 +28,9 @@ type FormState = {
   serviceAccountJson: string;
   driveAuthMode: DriveAuthMode;
   driveFolderId: string;
-  geminiApiKey: string;
-  geminiModel: string;
-  geminiPrompt: string;
+  openaiApiKey: string;
+  openaiModel: string;
+  openaiPrompt: string;
   dailyUploadCount: number;
   uploadTimes: string;
   timezone: string;
@@ -46,9 +46,9 @@ function toForm(settings: PublicSettings): FormState {
     serviceAccountJson: "",
     driveAuthMode: settings.driveAuthMode,
     driveFolderId: settings.driveFolderId ? driveFolderLink(settings.driveFolderId) : "",
-    geminiApiKey: "",
-    geminiModel: settings.geminiModel,
-    geminiPrompt: settings.geminiPrompt,
+    openaiApiKey: "",
+    openaiModel: settings.openaiModel,
+    openaiPrompt: settings.openaiPrompt,
     dailyUploadCount: settings.dailyUploadCount,
     uploadTimes: settings.uploadTimes,
     timezone: settings.timezone,
@@ -61,7 +61,7 @@ export function SettingsView() {
   const params = useSearchParams();
   const toasted = useRef(false);
   const [form, setForm] = useState<FormState | null>(null);
-  const [flags, setFlags] = useState({ secret: false, token: false, account: false, gemini: false, connected: false, channelTitle: "" });
+  const [flags, setFlags] = useState({ secret: false, token: false, account: false, openai: false, connected: false, channelTitle: "" });
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
 
@@ -72,7 +72,7 @@ export function SettingsView() {
       secret: data.settings.hasGoogleClientSecret,
       token: data.settings.hasRefreshToken,
       account: data.settings.hasServiceAccount,
-      gemini: data.settings.hasGeminiKey,
+      openai: data.settings.hasOpenAiKey,
       connected: data.settings.connected,
       channelTitle: data.settings.channelTitle,
     });
@@ -152,13 +152,13 @@ export function SettingsView() {
         </Button>
       </div>
       <p className="text-sm text-muted-foreground">
-        Upload now ignores the scheduler. It takes the next video, asks Gemini for the title, description, and tags, and publishes that video on YouTube immediately.
+        Upload now ignores the scheduler. It takes the next video, asks OpenAI for the title, description, and tags, and publishes that video on YouTube immediately.
       </p>
       <Tabs defaultValue="drive">
         <TabsList className="flex h-auto flex-wrap">
           <TabsTrigger value="drive">Drive</TabsTrigger>
           <TabsTrigger value="youtube">YouTube</TabsTrigger>
-          <TabsTrigger value="gemini">Gemini</TabsTrigger>
+          <TabsTrigger value="openai">OpenAI</TabsTrigger>
           <TabsTrigger value="schedule">Schedule</TabsTrigger>
         </TabsList>
         <TabsContent value="drive">
@@ -244,32 +244,32 @@ export function SettingsView() {
             </CardContent>
           </Card>
         </TabsContent>
-        <TabsContent value="gemini">
+        <TabsContent value="openai">
           <Card>
             <CardHeader>
-              <CardTitle>Gemini</CardTitle>
+              <CardTitle>OpenAI</CardTitle>
               <CardDescription>
-                New keys should use gemini-3.8-flash. The prompt must ask for title, description, tags, category, playlist, and shortSummary.
+                Paste a key from platform.openai.com. gpt-4o reads frames from the video and writes the title, description, and tags.
               </CardDescription>
             </CardHeader>
             <CardContent className="grid gap-4">
               <div className="grid gap-2">
-                <Label htmlFor="gemini-key">API key</Label>
+                <Label htmlFor="openai-key">API key</Label>
                 <Input
-                  id="gemini-key"
+                  id="openai-key"
                   type="password"
-                  value={form.geminiApiKey}
-                  placeholder={flags.gemini ? "Configured — leave blank to keep" : "Not set"}
-                  onChange={(event) => update("geminiApiKey", event.target.value)}
+                  value={form.openaiApiKey}
+                  placeholder={flags.openai ? "Configured — leave blank to keep" : "sk-..."}
+                  onChange={(event) => update("openaiApiKey", event.target.value)}
                 />
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="model">Model</Label>
-                <Input id="model" value={form.geminiModel} onChange={(event) => update("geminiModel", event.target.value)} />
+                <Input id="model" value={form.openaiModel} onChange={(event) => update("openaiModel", event.target.value)} />
               </div>
               <div className="grid gap-2">
                 <Label htmlFor="prompt">Prompt</Label>
-                <Textarea id="prompt" className="min-h-[220px] font-mono text-xs" value={form.geminiPrompt} onChange={(event) => update("geminiPrompt", event.target.value)} />
+                <Textarea id="prompt" className="min-h-[220px] font-mono text-xs" value={form.openaiPrompt} onChange={(event) => update("openaiPrompt", event.target.value)} />
               </div>
             </CardContent>
           </Card>

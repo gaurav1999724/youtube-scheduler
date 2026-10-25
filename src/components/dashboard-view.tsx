@@ -44,7 +44,7 @@ export function DashboardView() {
         <p className="text-xs font-medium uppercase tracking-[0.18em] text-primary">Overview</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight">AutoTube AI Studio</h1>
         <p className="mt-2 max-w-2xl text-sm text-muted-foreground">
-          Drive videos are fingerprinted, duplicates stay out of the queue, and Gemini writes the title before the daily slots go out.
+          Drive videos are fingerprinted, duplicates stay out of the queue, and OpenAI writes the title before the daily slots go out.
         </p>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">

@@ -1,8 +1,8 @@
 export const DEFAULT_DRIVE_FOLDER_ID = "1sS5RLXEKdz4Cb3K9vPp_sxKO75Ds36CL";
 
-export const DEFAULT_GEMINI_MODEL = "gemini-3.8-flash";
+export const DEFAULT_OPENAI_MODEL = "gpt-4o";
 
-export const DEFAULT_GEMINI_PROMPT = `Analyze this cartoon animation video thoroughly. Watch the visual scenes, character dialogue, actions, and tone.
+export const DEFAULT_OPENAI_PROMPT = `Analyze this cartoon animation video thoroughly. Use the frames to judge the visual scenes, character actions, and tone.
 Return ONLY a valid JSON object with this schema and no markdown:
 {
   "title": "High-CTR YouTube title under 70 characters with exactly one relevant emoji",
@@ -60,9 +60,9 @@ export type PublicSettings = {
   hasServiceAccount: boolean;
   driveAuthMode: DriveAuthMode;
   driveFolderId: string;
-  hasGeminiKey: boolean;
-  geminiModel: string;
-  geminiPrompt: string;
+  hasOpenAiKey: boolean;
+  openaiModel: string;
+  openaiPrompt: string;
   dailyUploadCount: number;
   uploadTimes: string;
   timezone: string;
