@@ -45,6 +45,7 @@ export type VideoDTO = {
   playlist: string | null;
   shortSummary: string | null;
   sortOrder: number;
+  durationSeconds: number | null;
   scheduledAt: string | null;
   privacyStatus: string | null;
   youtubeVideoId: string | null;
@@ -86,6 +87,17 @@ export const STATUS_LABEL: Record<string, string> = {
   failed: "Failed",
   excluded: "Excluded",
 };
+
+export function formatDuration(seconds: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds) || seconds <= 0) return "Length unknown";
+  const total = Math.round(seconds);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const remain = total % 60;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${remain.toString().padStart(2, "0")}s`;
+  return `${remain}s`;
+}
 
 export function formatBytes(size: string | null): string {
   const value = Number(size ?? 0);

@@ -14,22 +14,32 @@ function finish(command: ffmpeg.FfmpegCommand): Promise<void> {
 
 export function probeDuration(videoPath: string): Promise<number> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(ffmpegPath(), ["-i", videoPath, "-f", "null", "-"], {
+    const proc = spawn(ffmpegPath(), ["-hide_banner", "-i", videoPath], {
       stdio: ["ignore", "ignore", "pipe"],
     });
     let stderr = "";
+    let settled = false;
+    const finish = (seconds: number) => {
+      if (settled) return;
+      settled = true;
+      resolve(seconds);
+      proc.kill("SIGKILL");
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     proc.stderr.on("data", (chunk: Buffer) => {
       stderr += chunk.toString();
-      if (stderr.length > 12000) stderr = stderr.slice(-12000);
-    });
-    proc.on("error", reject);
-    proc.on("close", () => {
+      if (stderr.length > 20000) stderr = stderr.slice(-20000);
       const match = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(stderr);
-      if (!match) {
-        reject(new Error("Could not read the video duration."));
-        return;
-      }
-      resolve(Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]));
+      if (!match) return;
+      finish(Number(match[1]) * 3600 + Number(match[2]) * 60 + Number(match[3]));
+    });
+    proc.on("error", fail);
+    proc.on("close", () => {
+      if (!settled) fail(new Error("Could not read the video duration."));
     });
   });
 }

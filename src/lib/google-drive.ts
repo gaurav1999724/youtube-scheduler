@@ -9,6 +9,7 @@ export type DriveVideoFile = {
   mimeType: string;
   size: string | null;
   modifiedTime: string | null;
+  durationSeconds: number | null;
 };
 
 export async function listDriveVideos(folderId: string): Promise<DriveVideoFile[]> {
@@ -25,7 +26,7 @@ export async function listDriveVideos(folderId: string): Promise<DriveVideoFile[
   do {
     const response = await drive.files.list({
       q: query,
-      fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime)",
+      fields: "nextPageToken, files(id, name, mimeType, size, modifiedTime, videoMediaMetadata)",
       pageSize: 100,
       pageToken,
       supportsAllDrives: true,
@@ -33,18 +34,20 @@ export async function listDriveVideos(folderId: string): Promise<DriveVideoFile[
     });
     for (const file of response.data.files ?? []) {
       if (!file.id || !file.name || !file.mimeType) continue;
+      const millis = Number(file.videoMediaMetadata?.durationMillis);
       files.push({
         id: file.id,
         name: file.name,
         mimeType: file.mimeType,
         size: file.size ?? null,
         modifiedTime: file.modifiedTime ?? null,
+        durationSeconds: Number.isFinite(millis) && millis > 0 ? millis / 1000 : null,
       });
     }
     pageToken = response.data.nextPageToken ?? undefined;
   } while (pageToken);
 
-  files.sort((a, b) => (a.modifiedTime ?? "").localeCompare(b.modifiedTime ?? ""));
+  files.sort((a, b) => (b.durationSeconds ?? -1) - (a.durationSeconds ?? -1) || a.name.localeCompare(b.name));
   return files;
 }
 

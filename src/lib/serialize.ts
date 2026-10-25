@@ -50,6 +50,7 @@ export function serializeVideo(video: VideoWithRelations): VideoDTO {
     playlist: video.playlist,
     shortSummary: video.shortSummary,
     sortOrder: video.sortOrder,
+    durationSeconds: video.durationSeconds,
     scheduledAt: video.scheduledAt?.toISOString() ?? null,
     privacyStatus: video.privacyStatus,
     youtubeVideoId: video.youtubeVideoId,

@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { api } from "@/lib/api-client";
-import { formatBytes, STATUS_LABEL, type PrivacyStatus, type VideoDTO } from "@/lib/types";
+import { formatBytes, formatDuration, STATUS_LABEL, type PrivacyStatus, type VideoDTO } from "@/lib/types";
 
 function badgeVariant(status: string) {
   if (status === "uploaded") return "success" as const;
@@ -81,7 +81,7 @@ export function VideoCard({ video, onChanged }: { video: VideoDTO; onChanged: ()
         <div>
           <h3 className="line-clamp-2 text-base font-semibold">{video.title || video.name}</h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            {video.name} · {formatBytes(video.size)}
+            {video.name} · {formatBytes(video.size)} · {formatDuration(video.durationSeconds)}
           </p>
         </div>
         {video.shortSummary && <p className="line-clamp-2 text-sm text-muted-foreground">{video.shortSummary}</p>}

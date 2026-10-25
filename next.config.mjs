@@ -13,6 +13,7 @@ const nextConfig = {
       "/api/videos/[id]": ["./node_modules/ffmpeg-static/ffmpeg"],
       "/api/scheduler/run": ["./node_modules/ffmpeg-static/ffmpeg"],
       "/api/videos/upload-next": ["./node_modules/ffmpeg-static/ffmpeg"],
+      "/api/videos/direct": ["./node_modules/ffmpeg-static/ffmpeg"],
       "/api/cron": ["./node_modules/ffmpeg-static/ffmpeg"],
     },
   },

@@ -66,6 +66,7 @@ model Video {
   category        String?
   playlist        String?
   shortSummary    String?
+  durationSeconds Float?
   sortOrder       Int       @default(0)
   scheduledAt     DateTime?
   privacyStatus   String?

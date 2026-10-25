@@ -3,12 +3,13 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarClock, Clapperboard, Film, LayoutDashboard, Settings } from "lucide-react";
+import { CalendarClock, Clapperboard, Film, LayoutDashboard, Settings, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const links = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard },
   { href: "/queue", label: "Library", icon: Film },
+  { href: "/upload", label: "Upload", icon: Upload },
   { href: "/scheduler", label: "Scheduler", icon: CalendarClock },
   { href: "/settings", label: "Settings", icon: Settings },
 ];
