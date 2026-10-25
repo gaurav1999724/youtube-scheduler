@@ -23,10 +23,42 @@ import {
   VIDEO_DIR,
   THUMB_DIR,
 } from "@/lib/paths";
+import { debug, debugError } from "@/lib/log";
 import { errorMessage, type PrivacyStatus } from "@/lib/types";
 import { parseTags } from "@/lib/serialize";
 
 const ACTIVE_UPLOAD = new Set(["uploaded", "uploading"]);
+
+function queueDecision(video: { status: string; isCanonical: boolean; title: string | null; error: string | null }) {
+  if (video.status === "excluded") {
+    return { inQueue: false, scheduled: false, reason: "removed from the queue" };
+  }
+  if (!video.isCanonical || video.status === "duplicate") {
+    return { inQueue: false, scheduled: false, reason: "duplicate, kept out of the queue" };
+  }
+  if (video.status === "uploaded") {
+    return { inQueue: false, scheduled: false, reason: "already uploaded" };
+  }
+  if (video.status === "uploading") {
+    return { inQueue: true, scheduled: false, reason: "upload in progress" };
+  }
+  if (video.status === "failed") {
+    return { inQueue: true, scheduled: false, reason: `failed: ${(video.error || "unknown error").slice(0, 180)}` };
+  }
+  if (video.status === "hashing" || video.status === "analyzing") {
+    return { inQueue: true, scheduled: false, reason: `processing (${video.status})` };
+  }
+  if (video.status === "discovered" || !video.title) {
+    return { inQueue: true, scheduled: false, reason: "in the queue, waiting to be processed" };
+  }
+  if (video.status === "ready") {
+    return { inQueue: true, scheduled: false, reason: "processed and waiting for a slot" };
+  }
+  if (video.status === "scheduled") {
+    return { inQueue: true, scheduled: true, reason: "already on the schedule" };
+  }
+  return { inQueue: false, scheduled: false, reason: `status ${video.status}` };
+}
 
 async function logUpload(videoId: string, action: string, message: string) {
   await prisma.uploadLog.create({
@@ -120,6 +152,13 @@ export async function clusterVideos() {
         : keepLive
           ? member.status
           : "duplicate";
+      debug("queue", isWinner ? "kept in the queue" : "removed from the queue", {
+        video: member.name,
+        status,
+        inQueue: isWinner || keepLive,
+        scheduled: status === "scheduled",
+        reason: isWinner ? "canonical copy" : "duplicate of another file",
+      });
       await prisma.video.update({
         where: { id: member.id },
         data: {
@@ -141,11 +180,40 @@ export async function loadDayPlans(): Promise<DayPlanSlot[]> {
 
 export async function assignSlots() {
   const settings = await getResolvedSettings();
+  const library = await prisma.video.findMany({
+    orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+    select: {
+      id: true,
+      name: true,
+      status: true,
+      isCanonical: true,
+      title: true,
+      error: true,
+      sortOrder: true,
+    },
+  });
   const videos = await prisma.video.findMany({
     where: { isCanonical: true, status: { in: ["ready", "scheduled"] } },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  if (videos.length === 0) return 0;
+  debug("schedule", "checking every video", { library: library.length, eligible: videos.length });
+  const eligibleIds = new Set(videos.map((video) => video.id));
+  for (const video of library) {
+    if (eligibleIds.has(video.id)) continue;
+    const decision = queueDecision(video);
+    debug("schedule", "not scheduled", {
+      video: video.name,
+      status: video.status,
+      inQueue: decision.inQueue,
+      scheduled: false,
+      sortOrder: video.sortOrder,
+      reason: decision.reason,
+    });
+  }
+  if (videos.length === 0) {
+    debug("schedule", "finished with nothing to place", { library: library.length });
+    return 0;
+  }
   const slots = generateSlots(settings, videos.length, await loadDayPlans());
   await prisma.$transaction(
     videos.map((video, index) =>
@@ -159,11 +227,24 @@ export async function assignSlots() {
       }),
     ),
   );
+  videos.forEach((video, index) => {
+    debug("schedule", "scheduled", {
+      video: video.name,
+      status: "scheduled",
+      inQueue: true,
+      scheduled: true,
+      at: slots[index].toISOString(),
+      privacy: video.privacyStatus || settings.privacyDefault,
+      sortOrder: video.sortOrder,
+    });
+  });
+  debug("schedule", "finished", { scheduled: videos.length, library: library.length });
   return videos.length;
 }
 
 export async function syncDrive() {
   const settings = await getResolvedSettings();
+  debug("sync", "started", { folderId: settings.driveFolderId });
   const files = await listDriveVideos(settings.driveFolderId);
   const maxOrder = await prisma.video.aggregate({ _max: { sortOrder: true } });
   let order = (maxOrder._max.sortOrder ?? -1) + 1;
@@ -189,11 +270,19 @@ export async function syncDrive() {
       });
       order += 1;
       created += 1;
+      debug("sync", "added to the queue", { video: file.name, status: "discovered", inQueue: true, scheduled: false });
     } else {
       await prisma.video.update({ where: { id: existing.id }, data });
       updated += 1;
+      debug("sync", "already in the library", {
+        video: file.name,
+        status: existing.status,
+        inQueue: queueDecision(existing).inQueue,
+        scheduled: existing.status === "scheduled",
+      });
     }
   }
+  debug("sync", "finished", { created, updated, total: files.length });
   return { created, updated, total: files.length };
 }
 
@@ -206,6 +295,7 @@ export async function processLibrary() {
   const budgetMs = process.env.VERCEL ? 45_000 : 0;
   const outOfTime = () => budgetMs > 0 && Date.now() - started > budgetMs;
 
+  debug("process", "started", { budgetMs: budgetMs || "none" });
   const pendingHash = await prisma.video.findMany({
     where: {
       fingerprint: null,
@@ -214,8 +304,17 @@ export async function processLibrary() {
     orderBy: { sortOrder: "asc" },
   });
 
+  debug("process", "fingerprint queue", { waiting: pendingHash.length });
   for (const video of pendingHash) {
-    if (outOfTime()) break;
+    if (outOfTime()) {
+      debug("process", "stopped, request time budget reached", {
+        stage: "fingerprint",
+        hashed,
+        left: pendingHash.length - hashed,
+      });
+      break;
+    }
+    debug("process", "processing", { video: video.name, stage: "fingerprint", status: video.status, inQueue: true, scheduled: false });
     try {
       await prisma.video.update({
         where: { id: video.id },
@@ -231,9 +330,11 @@ export async function processLibrary() {
         data: { fingerprint, status: "discovered", localPath: filePath },
       });
       hashed += 1;
+      debug("process", "fingerprint done", { video: video.name, status: "discovered", inQueue: true, scheduled: false });
     } catch (error) {
       const message = errorMessage(error);
       errors.push({ id: video.id, name: video.name, message });
+      debugError("process", "fingerprint failed", { video: video.name, status: "failed", inQueue: true, scheduled: false, error: message });
       await prisma.video.update({
         where: { id: video.id },
         data: { status: "failed", error: message.slice(0, 1000) },
@@ -254,8 +355,17 @@ export async function processLibrary() {
     orderBy: { sortOrder: "asc" },
   });
 
+  debug("process", "analysis queue", { waiting: pendingAnalysis.length });
   for (const video of pendingAnalysis) {
-    if (outOfTime()) break;
+    if (outOfTime()) {
+      debug("process", "stopped, request time budget reached", {
+        stage: "analysis",
+        analyzed,
+        left: pendingAnalysis.length - analyzed,
+      });
+      break;
+    }
+    debug("process", "processing", { video: video.name, stage: "gemini", status: video.status, inQueue: true, scheduled: false });
     try {
       if (!settings.geminiApiKey) {
         throw new Error("Gemini API key is not configured.");
@@ -288,9 +398,11 @@ export async function processLibrary() {
       });
       await logUpload(video.id, "analyze", seo.title);
       analyzed += 1;
+      debug("process", "ready for a slot", { video: video.name, status: "ready", inQueue: true, scheduled: false, title: seo.title });
     } catch (error) {
       const message = errorMessage(error);
       errors.push({ id: video.id, name: video.name, message });
+      debugError("process", "analysis failed", { video: video.name, status: "failed", inQueue: true, scheduled: false, error: message });
       await prisma.video.update({
         where: { id: video.id },
         data: { status: "failed", error: message.slice(0, 1000) },
@@ -306,6 +418,7 @@ export async function processLibrary() {
       status: { in: ["discovered", "failed", "hashing", "analyzing"] },
     },
   });
+  debug("process", "finished", { hashed, duplicates, analyzed, scheduled, remaining, errors: errors.length });
   return { hashed, duplicates, analyzed, scheduled, remaining, errors };
 }
 
@@ -348,14 +461,44 @@ export async function uploadDueVideos() {
     if (privacy === "public") return at <= now + PUBLIC_EARLY_WINDOW_MS;
     return at <= now;
   });
+  const dueIds = new Set(due.map((video) => video.id));
+  debug("upload", "checking scheduled videos", {
+    scheduled: scheduled.length,
+    due: due.length,
+    cap,
+    usedToday,
+    timezone: settings.timezone,
+  });
+  for (const video of scheduled) {
+    if (dueIds.has(video.id)) continue;
+    debug("upload", "not due yet", {
+      video: video.name,
+      status: video.status,
+      inQueue: true,
+      scheduled: true,
+      at: video.scheduledAt?.toISOString() ?? "-",
+      privacy: asPrivacy(video.privacyStatus, settings.privacyDefault),
+    });
+  }
 
   let uploaded = 0;
   let failed = 0;
   let skipped = 0;
 
-  for (const video of due) {
+  for (let index = 0; index < due.length; index += 1) {
+    const video = due[index];
     if (usedToday >= cap) {
-      skipped += due.length - (uploaded + failed + skipped);
+      for (const waiting of due.slice(index)) {
+        debug("upload", "not uploaded, daily cap reached", {
+          video: waiting.name,
+          status: waiting.status,
+          inQueue: true,
+          scheduled: true,
+          usedToday,
+          cap,
+        });
+        skipped += 1;
+      }
       break;
     }
     const claimed = await prisma.video.updateMany({
@@ -363,10 +506,16 @@ export async function uploadDueVideos() {
       data: { status: "uploading", error: null },
     });
     if (claimed.count === 0) {
+      debug("upload", "skipped, another run already claimed it", {
+        video: video.name,
+        inQueue: true,
+        scheduled: true,
+      });
       skipped += 1;
       continue;
     }
     usedToday += 1;
+    debug("upload", "uploading", { video: video.name, status: "uploading", inQueue: true, scheduled: true });
     try {
       const fresh = await prisma.video.findUniqueOrThrow({ where: { id: video.id } });
       const filePath = await ensureLocalFile(fresh);
@@ -401,6 +550,13 @@ export async function uploadDueVideos() {
           : `YouTube id ${result.id}`,
       );
       uploaded += 1;
+      debug("upload", "uploaded", {
+        video: fresh.name,
+        status: "uploaded",
+        inQueue: false,
+        scheduled: false,
+        youtubeId: result.id,
+      });
     } catch (error) {
       const message = errorMessage(error);
       await prisma.video.update({
@@ -410,9 +566,17 @@ export async function uploadDueVideos() {
       await logUpload(video.id, "error", message);
       failed += 1;
       usedToday -= 1;
+      debugError("upload", "upload failed", {
+        video: video.name,
+        status: "failed",
+        inQueue: true,
+        scheduled: false,
+        error: message,
+      });
     }
   }
 
+  debug("upload", "finished", { uploaded, failed, skipped, due: due.length });
   return { uploaded, failed, skipped };
 }
 

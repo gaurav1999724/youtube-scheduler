@@ -1,4 +1,5 @@
 import { formatInTimeZone, fromZonedTime } from "date-fns-tz";
+import { debug, debugError } from "@/lib/log";
 import type { ResolvedSettings } from "@/lib/settings";
 
 export type ClockTime = { hour: number; minute: number };
@@ -59,24 +60,51 @@ export function generateSlots(
   plans: DayPlanSlot[] = [],
   from = new Date(),
 ): Date[] {
-  if (count <= 0) return [];
+  if (count <= 0) {
+    debug("schedule", "no slots requested", { count });
+    return [];
+  }
   const timezone = settings.timezone || "Asia/Kolkata";
   const start = formatInTimeZone(from, timezone, "yyyy-MM-dd");
+  debug("schedule", "building slots", {
+    count,
+    timezone,
+    from: from.toISOString(),
+    uploadTimes: settings.uploadTimes,
+    dailyUploadCount: settings.dailyUploadCount,
+    dayPlans: plans.length,
+  });
   const slots: Date[] = [];
   for (let day = 0; day < 400 && slots.length < count; day += 1) {
     const date = shiftDate(start, day);
     const times = timesForDate(date, settings, plans);
+    if (times.length === 0) {
+      debug("schedule", "day has no upload times", { date });
+    }
     for (const time of times) {
       const hh = String(time.hour).padStart(2, "0");
       const mm = String(time.minute).padStart(2, "0");
       const slot = fromZonedTime(`${date} ${hh}:${mm}:00`, timezone);
-      if (slot.getTime() > from.getTime() + 5000) slots.push(slot);
+      const clock = formatClock(time);
+      if (slot.getTime() <= from.getTime() + 5000) {
+        debug("schedule", "slot skipped because it is already past", { date, time: clock, slot: slot.toISOString() });
+        continue;
+      }
+      slots.push(slot);
+      debug("schedule", "slot opened", { date, time: clock, slot: slot.toISOString(), index: slots.length });
       if (slots.length >= count) break;
     }
   }
   if (slots.length < count) {
+    debugError("schedule", "could not build enough future slots", { requested: count, built: slots.length });
     throw new Error("Could not build enough future upload slots.");
   }
+  debug("schedule", "slots ready", {
+    requested: count,
+    built: slots.length,
+    first: slots[0]?.toISOString() ?? "-",
+    last: slots[slots.length - 1]?.toISOString() ?? "-",
+  });
   return slots;
 }
 
