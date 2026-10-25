@@ -51,42 +51,53 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function explainGeminiError(error: unknown): Error {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (raw.includes("Your project has been denied access") || raw.includes("PERMISSION_DENIED")) {
+    return new Error(
+      "Gemini blocked this API key. Google denied the Cloud project that owns it, so the title was not written and the video was not uploaded. Create a new key at https://aistudio.google.com/apikey in a project with billing turned on, paste it under Settings → Gemini, save, and run Upload now again.",
+    );
+  }
+  return error instanceof Error ? error : new Error(raw || "Gemini request failed.");
+}
+
 export async function analyzeVideoWithGemini(
   localFilePath: string,
   options: { mimeType?: string; apiKey: string; model: string; prompt: string },
 ): Promise<SeoMetadata> {
   const mimeType = options.mimeType || "video/mp4";
   const ai = new GoogleGenAI({ apiKey: options.apiKey });
-  const uploaded = await ai.files.upload({
-    file: localFilePath,
-    config: {
-      mimeType,
-      displayName: "Cartoon Video Analysis",
-    },
-  });
-  if (!uploaded.name) throw new Error("Gemini did not return a file name.");
+  let fileName = "";
+  try {
+    const uploaded = await ai.files.upload({
+      file: localFilePath,
+      config: {
+        mimeType,
+        displayName: "Cartoon Video Analysis",
+      },
+    });
+    if (!uploaded.name) throw new Error("Gemini did not return a file name.");
+    fileName = uploaded.name;
 
-  let file = uploaded;
-  const deadline = Date.now() + 3 * 60 * 1000;
-  while (file.state && file.state !== FileState.ACTIVE) {
-    if (file.state === FileState.FAILED) {
-      throw new Error(file.error?.message || "Gemini video processing failed.");
+    let file = uploaded;
+    const deadline = Date.now() + 3 * 60 * 1000;
+    while (file.state && file.state !== FileState.ACTIVE) {
+      if (file.state === FileState.FAILED) {
+        throw new Error(file.error?.message || "Gemini video processing failed.");
+      }
+      if (Date.now() > deadline) {
+        throw new Error("Gemini was still processing the video after 3 minutes.");
+      }
+      await sleep(3000);
+      file = await ai.files.get({ name: file.name! });
     }
-    if (Date.now() > deadline) {
-      throw new Error("Gemini was still processing the video after 3 minutes.");
+    if (!file.uri || !file.mimeType) {
+      throw new Error("Gemini did not return a playable file URI.");
     }
-    await sleep(3000);
-    file = await ai.files.get({ name: file.name! });
-  }
-  if (!file.uri || !file.mimeType) {
-    throw new Error("Gemini did not return a playable file URI.");
-  }
 
-  const prompt = `${options.prompt.trim()}
+    const prompt = `${options.prompt.trim()}
 
 Return only one JSON object with the keys title, description, tags, category, playlist, and shortSummary.`;
-
-  try {
     const response = await ai.models.generateContent({
       model: options.model,
       contents: [
@@ -101,9 +112,11 @@ Return only one JSON object with the keys title, description, tags, category, pl
     const text = response.text;
     if (!text) throw new Error("Gemini returned an empty response.");
     return parseModelJson(text);
+  } catch (error) {
+    throw explainGeminiError(error);
   } finally {
-    if (file.name) {
-      await ai.files.delete({ name: file.name }).catch(() => undefined);
+    if (fileName) {
+      await ai.files.delete({ name: fileName }).catch(() => undefined);
     }
   }
 }
