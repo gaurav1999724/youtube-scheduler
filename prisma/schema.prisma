@@ -1,0 +1,86 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// Singleton row (id = "default") for API credentials and schedule preferences.
+model Settings {
+  id                 String   @id @default("default")
+  googleClientId     String?
+  googleClientSecret String?
+  googleRefreshToken String?
+  serviceAccountJson String?
+  driveAuthMode      String   @default("oauth")
+  driveFolderId      String   @default("1sS5RLXEKdz4Cb3K9vPp_sxKO75Ds36CL")
+  geminiApiKey       String?
+  geminiModel        String   @default("gemini-3.8-flash")
+  geminiPrompt       String
+  dailyUploadCount   Int      @default(2)
+  uploadTimes        String   @default("10:00,18:00")
+  timezone           String   @default("Asia/Kolkata")
+  privacyDefault     String   @default("private")
+  madeForKids        Boolean  @default(true)
+  categoryId         String   @default("1")
+  channelId          String?
+  channelTitle       String?
+  updatedAt          DateTime @updatedAt
+}
+
+/// Per-date upload times. `times` is comma-separated HH:mm. Empty means no uploads that day.
+model DayPlan {
+  date      String   @id
+  times     String
+  updatedAt DateTime @updatedAt
+}
+
+/// Drive file plus queue, fingerprint, SEO, and upload state.
+model Video {
+  id              String    @id @default(cuid())
+  driveFileId     String    @unique
+  name            String
+  mimeType        String
+  size            String?
+  driveModifiedAt DateTime?
+  localPath       String?
+  thumbPath       String?
+  fingerprint     String?
+  duplicateOfId   String?
+  duplicateOf     Video?    @relation("DuplicateGroup", fields: [duplicateOfId], references: [id], onDelete: SetNull)
+  duplicates      Video[]   @relation("DuplicateGroup")
+  isCanonical     Boolean   @default(true)
+  status          String    @default("discovered")
+  title           String?
+  description     String?
+  tags            String?
+  category        String?
+  playlist        String?
+  shortSummary    String?
+  sortOrder       Int       @default(0)
+  scheduledAt     DateTime?
+  privacyStatus   String?
+  youtubeVideoId  String?
+  uploadedAt      DateTime?
+  error           String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  logs            UploadLog[]
+
+  @@index([status, scheduledAt])
+  @@index([isCanonical])
+  @@index([duplicateOfId])
+}
+
+model UploadLog {
+  id        String   @id @default(cuid())
+  videoId   String
+  video     Video    @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  action    String
+  message   String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
