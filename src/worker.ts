@@ -21,4 +21,5 @@ cron.schedule(
   { timezone, noOverlap: true },
 );
 
+console.log(`[autotube] cron secret: ${process.env.CRON_SECRET}`);
 console.log(`[autotube] worker watching upload slots (${timezone})`);
