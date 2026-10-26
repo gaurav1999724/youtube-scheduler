@@ -9,11 +9,11 @@ type Youtube = ReturnType<typeof google.youtube>;
 export const SHORTS_MIN_SECONDS = 10;
 export const SHORTS_MAX_SECONDS = 120;
 
-export type VideoLength = "skip" | "short" | "standard";
+export type VideoLength = "skip" | "short" | "standard" | "unknown";
 
-/** Under 10 seconds is skipped. 10 seconds through 2 minutes is a Short. Longer than 2 minutes is a normal video. */
+/** Under 10 seconds is skipped. 10 seconds through 2 minutes is a Short. Longer than 2 minutes is a normal video. An unreadable length is unknown. */
 export function classifyDuration(seconds: number): VideoLength {
-  if (!Number.isFinite(seconds) || seconds <= 0) return "standard";
+  if (!Number.isFinite(seconds) || seconds <= 0) return "unknown";
   if (seconds < SHORTS_MIN_SECONDS) return "skip";
   if (seconds <= SHORTS_MAX_SECONDS) return "short";
   return "standard";
@@ -32,7 +32,7 @@ export function shapeForYouTube(input: {
   description: string;
   tags: string[];
   playlist?: string | null;
-  format: Exclude<VideoLength, "skip">;
+  format: Exclude<VideoLength, "skip" | "unknown">;
 }) {
   if (input.format === "short") {
     const suffix = " #Shorts";

@@ -6,9 +6,10 @@ import { prisma } from "@/lib/prisma";
 import { getResolvedSettings } from "@/lib/settings";
 import { downloadDriveFile, listDriveVideos } from "@/lib/google-drive";
 import { generateVideoFingerprint, groupByFingerprint } from "@/lib/deduplicator";
-import { probeDuration, transcodeToMp4, writeThumbnail } from "@/lib/media";
+import { probeDuration, transcodeToMp4, writeThumbnail, ensureVerticalShort } from "@/lib/media";
 import { analyzeVideoWithOpenAI } from "@/lib/openai";
 import { uploadToYouTube, classifyDuration, shapeForYouTube } from "@/lib/youtube";
+import { resolveDuration, savedLength } from "@/lib/queue-order";
 import { formatInTimeZone } from "date-fns-tz";
 import {
   dayBounds,
@@ -31,11 +32,7 @@ import { parseTags } from "@/lib/serialize";
 const ACTIVE_UPLOAD = new Set(["uploaded", "uploading"]);
 const MANUAL_DRIVE_PREFIX = "manual-";
 const notManual = { NOT: { driveFileId: { startsWith: MANUAL_DRIVE_PREFIX } } };
-const longestFirst = [
-  { durationSeconds: { sort: "desc" as const, nulls: "last" as const } },
-  { sortOrder: "asc" as const },
-  { createdAt: "asc" as const },
-];
+const longestFirst = [{ queueScore: "desc" as const }, { createdAt: "asc" as const }];
 
 function queueDecision(video: { status: string; isCanonical: boolean; title: string | null; error: string | null }) {
   if (video.status === "excluded") {
@@ -250,20 +247,59 @@ export async function assignSlots() {
   return videos.length;
 }
 
+async function fileForYouTube(filePath: string, length: "short" | "standard", name: string) {
+  if (length !== "short") return filePath;
+  debug("upload", "rendering a vertical Short", { video: name });
+  return ensureVerticalShort(filePath);
+}
+
+async function markLengthUnread(video: { id: string; name: string }, filePath?: string) {
+  const message = "Could not read this video's length, so it was not uploaded.";
+  await prisma.video.update({
+    where: { id: video.id },
+    data: {
+      status: "failed",
+      error: message,
+      queueScore: -1,
+      ...(filePath ? { localPath: filePath } : {}),
+    },
+  });
+  await logUpload(video.id, "error", message);
+  debugError("process", "length unreadable", { video: video.name });
+}
+
 async function rankDriveVideosByDuration() {
   await prisma.$executeRaw`
-    WITH ranked AS (
-      SELECT id, (ROW_NUMBER() OVER (
-        ORDER BY "durationSeconds" DESC NULLS LAST, "sortOrder" ASC, "createdAt" ASC
-      ) - 1)::int AS next_order
+    WITH scored AS (
+      SELECT
+        id,
+        "createdAt",
+        CASE
+          WHEN ("durationSeconds" IS NULL OR "durationSeconds" <= 0) AND status = 'failed' THEN -1
+          WHEN "durationSeconds" >= 10 THEN 1000000000 + "durationSeconds"
+          WHEN "durationSeconds" IS NULL OR "durationSeconds" <= 0 THEN
+            100000000 + LEAST(
+              COALESCE(
+                CASE WHEN "size" ~ '^[0-9]+([.][0-9]+)?$' THEN "size"::double precision ELSE 0 END,
+                0
+              ) / 1048576,
+              800000000
+            )
+          ELSE "durationSeconds"
+        END AS score
       FROM autotube."Video"
       WHERE "driveFileId" NOT LIKE 'manual-%'
+    ),
+    ranked AS (
+      SELECT id, score, (ROW_NUMBER() OVER (ORDER BY score DESC, "createdAt" ASC) - 1)::int AS next_order
+      FROM scored
     )
     UPDATE autotube."Video" AS v
-    SET "sortOrder" = ranked.next_order
+    SET "queueScore" = ranked.score,
+        "sortOrder" = ranked.next_order
     FROM ranked
     WHERE v.id = ranked.id
-      AND v."sortOrder" IS DISTINCT FROM ranked.next_order
+      AND (v."queueScore" IS DISTINCT FROM ranked.score OR v."sortOrder" IS DISTINCT FROM ranked.next_order)
   `;
 }
 
@@ -271,46 +307,73 @@ export async function syncDrive() {
   const settings = await getResolvedSettings();
   debug("sync", "started", { folderId: settings.driveFolderId });
   const files = await listDriveVideos(settings.driveFolderId);
-  const maxOrder = await prisma.video.aggregate({ _max: { sortOrder: true } });
-  let order = (maxOrder._max.sortOrder ?? -1) + 1;
+  const existingIds = new Set<string>();
+  for (let index = 0; index < files.length; index += 500) {
+    const slice = files.slice(index, index + 500).map((file) => file.id);
+    const rows = await prisma.video.findMany({
+      where: { driveFileId: { in: slice } },
+      select: { driveFileId: true },
+    });
+    for (const row of rows) existingIds.add(row.driveFileId);
+  }
+
   let created = 0;
   let updated = 0;
-  for (const file of files) {
-    const existing = await prisma.video.findUnique({ where: { driveFileId: file.id } });
-    const data = {
-      name: file.name,
-      mimeType: file.mimeType,
-      size: file.size,
-      driveModifiedAt: file.modifiedTime ? new Date(file.modifiedTime) : null,
-      ...(file.durationSeconds != null ? { durationSeconds: file.durationSeconds } : {}),
-    };
-    if (!existing) {
-      await prisma.video.create({
-        data: {
-          ...data,
+  for (let index = 0; index < files.length; index += 200) {
+    const chunk = files.slice(index, index + 200);
+    const fresh = chunk.filter((file) => !existingIds.has(file.id));
+    const known = chunk.filter((file) => existingIds.has(file.id));
+    if (fresh.length > 0) {
+      await prisma.video.createMany({
+        data: fresh.map((file) => ({
           driveFileId: file.id,
-          sortOrder: order,
+          name: file.name,
+          mimeType: file.mimeType,
+          size: file.size,
+          driveModifiedAt: file.modifiedTime ? new Date(file.modifiedTime) : null,
+          durationSeconds: file.durationSeconds,
+          queueScore: 0,
+          sortOrder: 0,
           status: "discovered",
           isCanonical: true,
-        },
+        })),
+        skipDuplicates: true,
       });
-      order += 1;
-      created += 1;
-      debug("sync", "added to the queue", { video: file.name, status: "discovered", inQueue: true, scheduled: false });
-    } else {
-      await prisma.video.update({ where: { id: existing.id }, data });
-      updated += 1;
-      debug("sync", "already in the library", {
-        video: file.name,
-        status: existing.status,
-        inQueue: queueDecision(existing).inQueue,
-        scheduled: existing.status === "scheduled",
-      });
+      created += fresh.length;
+    }
+    if (known.length > 0) {
+      const ids = known.map((file) => file.id);
+      const names = known.map((file) => file.name);
+      const mimes = known.map((file) => file.mimeType);
+      const sizes = known.map((file) => file.size);
+      const modified = known.map((file) => (file.modifiedTime ? new Date(file.modifiedTime) : null));
+      const durations = known.map((file) => file.durationSeconds);
+      await prisma.$executeRaw`
+        UPDATE autotube."Video" AS v
+        SET
+          name = data.name,
+          "mimeType" = data.mime,
+          size = data.size,
+          "driveModifiedAt" = data.modified,
+          "durationSeconds" = COALESCE(v."durationSeconds", data.duration)
+        FROM (
+          SELECT * FROM unnest(
+            ${ids}::text[],
+            ${names}::text[],
+            ${mimes}::text[],
+            ${sizes}::text[],
+            ${modified}::timestamptz[],
+            ${durations}::float8[]
+          ) AS t(drive_id, name, mime, size, modified, duration)
+        ) AS data
+        WHERE v."driveFileId" = data.drive_id
+      `;
+      updated += known.length;
     }
   }
-  debug("sync", "finished", { created, updated, total: files.length });
+
   await rankDriveVideosByDuration();
-  debug("sync", "ranked by duration, longest first", { total: files.length });
+  debug("sync", "ranked by duration, longest first", { created, updated, total: files.length });
   return { created, updated, total: files.length };
 }
 
@@ -350,10 +413,15 @@ export async function processLibrary() {
         data: { status: "hashing", error: null },
       });
       const filePath = await ensureLocalFile(video);
-      const duration = await writeThumb(video.id, filePath).catch(async () => {
+      const probed = await writeThumb(video.id, filePath).catch(async () => {
         return probeDuration(filePath).catch(() => 0);
       });
+      const duration = resolveDuration(probed, video.durationSeconds);
       const length = classifyDuration(duration);
+      if (length === "unknown") {
+        await markLengthUnread(video, filePath);
+        continue;
+      }
       if (length === "skip") {
         const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
         await prisma.video.update({
@@ -364,7 +432,7 @@ export async function processLibrary() {
             scheduledAt: null,
             localPath: filePath,
             error: message,
-            ...(duration > 0 ? { durationSeconds: duration } : {}),
+            ...savedLength(duration, video.size),
           },
         });
         await logUpload(video.id, "skip", message);
@@ -378,7 +446,7 @@ export async function processLibrary() {
           fingerprint,
           status: "discovered",
           localPath: filePath,
-          ...(duration > 0 ? { durationSeconds: duration } : {}),
+          ...savedLength(duration, video.size),
         },
       });
       hashed += 1;
@@ -429,8 +497,13 @@ export async function processLibrary() {
       });
       const fresh = await prisma.video.findUniqueOrThrow({ where: { id: video.id } });
       const filePath = await ensureLocalFile(fresh);
-      const duration = await probeDuration(filePath).catch(() => 0);
+      const probed = await probeDuration(filePath).catch(() => 0);
+      const duration = resolveDuration(probed, fresh.durationSeconds);
       const length = classifyDuration(duration);
+      if (length === "unknown") {
+        await markLengthUnread(video, filePath);
+        continue;
+      }
       if (length === "skip") {
         const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
         await prisma.video.update({
@@ -440,7 +513,7 @@ export async function processLibrary() {
             isCanonical: false,
             scheduledAt: null,
             error: message,
-            ...(duration > 0 ? { durationSeconds: duration } : {}),
+            ...savedLength(duration, fresh.size),
           },
         });
         await logUpload(video.id, "skip", message);
@@ -471,7 +544,7 @@ export async function processLibrary() {
           shortSummary: seo.shortSummary,
           localPath: filePath,
           error: null,
-          ...(duration > 0 ? { durationSeconds: duration } : {}),
+          ...savedLength(duration, fresh.size),
         },
       });
       await logUpload(video.id, "analyze", `${length === "short" ? "YouTube Short" : "Normal video"}: ${shaped.title}`);
@@ -614,8 +687,15 @@ export async function uploadDueVideos() {
     try {
       const fresh = await prisma.video.findUniqueOrThrow({ where: { id: video.id } });
       const filePath = await ensureLocalFile(fresh);
-      const duration = await probeDuration(filePath).catch(() => 0);
+      const probed = await probeDuration(filePath).catch(() => 0);
+      const duration = resolveDuration(probed, fresh.durationSeconds);
       const length = classifyDuration(duration);
+      if (length === "unknown") {
+        await markLengthUnread(fresh, filePath);
+        usedToday -= 1;
+        skipped += 1;
+        continue;
+      }
       if (length === "skip") {
         const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
         await prisma.video.update({
@@ -625,7 +705,7 @@ export async function uploadDueVideos() {
             isCanonical: false,
             scheduledAt: null,
             error: message,
-            ...(duration > 0 ? { durationSeconds: duration } : {}),
+            ...savedLength(duration, fresh.size),
           },
         });
         await logUpload(fresh.id, "skip", message);
@@ -642,8 +722,9 @@ export async function uploadDueVideos() {
         playlist: fresh.playlist,
         format: length,
       });
+      const uploadPath = await fileForYouTube(filePath, length, fresh.name);
       const result = await uploadToYouTube({
-        videoPath: filePath,
+        videoPath: uploadPath,
         title: shaped.title,
         description: shaped.description,
         tags: shaped.tags,
@@ -739,8 +820,13 @@ export async function uploadNextVideo() {
       const filePath = await ensureLocalFile(current);
       debug("upload-now", "file ready", { video: current.name, path: filePath });
 
-      const duration = await writeThumb(current.id, filePath).catch(async () => probeDuration(filePath).catch(() => 0));
+      const probed = await writeThumb(current.id, filePath).catch(async () => probeDuration(filePath).catch(() => 0));
+      const duration = resolveDuration(probed, current.durationSeconds);
       const length = classifyDuration(duration);
+      if (length === "unknown") {
+        await markLengthUnread(current, filePath);
+        continue;
+      }
       if (length === "skip") {
         const message = `Skipped. ${duration.toFixed(1)}s is under 10 seconds, so it is not uploaded.`;
         await prisma.video.update({
@@ -751,7 +837,7 @@ export async function uploadNextVideo() {
             scheduledAt: null,
             localPath: filePath,
             error: message,
-            ...(duration > 0 ? { durationSeconds: duration } : {}),
+            ...savedLength(duration, current.size),
           },
         });
         await logUpload(current.id, "skip", message);
@@ -822,8 +908,9 @@ export async function uploadNextVideo() {
         playlist: shaped.playlist,
         privacy: "public",
       });
+      const uploadPath = await fileForYouTube(filePath, length, current.name);
       const result = await uploadToYouTube({
-        videoPath: filePath,
+        videoPath: uploadPath,
         title: shaped.title,
         description: shaped.description,
         tags: shaped.tags,
@@ -898,6 +985,9 @@ export async function publishManualVideo(input: { filePath: string; name: string
     fs.rmSync(input.filePath, { force: true });
     throw new Error(`This video is ${duration.toFixed(1)} seconds. Videos under 10 seconds are not uploaded.`);
   }
+  if (length !== "short" && length !== "standard") {
+    throw new Error("Could not read this video's length, so it was not uploaded.");
+  }
 
   const name = path.basename(input.name).slice(0, 180) || "video.mp4";
   const maxOrder = await prisma.video.aggregate({ _max: { sortOrder: true } });
@@ -912,7 +1002,7 @@ export async function publishManualVideo(input: { filePath: string; name: string
       isCanonical: true,
       privacyStatus: "public",
       scheduledAt: null,
-      durationSeconds: duration,
+      ...savedLength(duration, String(input.size)),
       sortOrder: (maxOrder._max.sortOrder ?? -1) + 1,
     },
   });
@@ -952,8 +1042,9 @@ export async function publishManualVideo(input: { filePath: string; name: string
       title: shaped.title,
       playlist: shaped.playlist,
     });
+    const uploadPath = await fileForYouTube(input.filePath, length, name);
     const result = await uploadToYouTube({
-      videoPath: input.filePath,
+      videoPath: uploadPath,
       title: shaped.title,
       description: shaped.description,
       tags: shaped.tags,

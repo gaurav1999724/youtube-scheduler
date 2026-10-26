@@ -10,6 +10,7 @@
     "start": "next start",
     "lint": "next lint",
     "worker": "tsx src/worker.ts",
+    "test": "tsx --test src/lib/youtube.test.ts src/lib/queue-order.test.ts src/lib/media-short.test.ts",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate"
   },

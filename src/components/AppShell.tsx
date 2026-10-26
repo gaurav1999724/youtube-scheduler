@@ -48,7 +48,18 @@ export function AppShell({ children }: { children: ReactNode }) {
           })}
         </nav>
         <p className="px-6 py-5 text-xs leading-5 text-muted-foreground">
-          Local studio. API keys and refresh tokens stay on this machine.
+          Local studio. API keys and refresh tokens stay on this machine.{" "}
+          <button
+            type="button"
+            className="underline-offset-4 hover:underline"
+            onClick={() => {
+              fetch("/api/auth/session", { method: "DELETE" }).finally(() => {
+                window.location.assign("/login");
+              });
+            }}
+          >
+            Sign out
+          </button>
         </p>
       </aside>
       <div className="md:pl-64">

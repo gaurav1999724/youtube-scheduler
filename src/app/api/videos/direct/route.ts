@@ -1,6 +1,6 @@
 import path from "path";
 import { NextResponse } from "next/server";
-import { assembleUpload, assertVideoFile, saveChunk } from "@/lib/incoming";
+import { assembleUpload, assertVideoFile, CHUNK_BYTES, saveChunk } from "@/lib/incoming";
 import { toErrorResponse } from "@/lib/http";
 import { debug, debugError } from "@/lib/log";
 import { publishManualVideo } from "@/lib/pipeline";
@@ -12,6 +12,11 @@ export const maxDuration = 300;
 
 export async function POST(request: Request) {
   const type = request.headers.get("content-type") || "";
+  const declared = Number(request.headers.get("content-length") || "");
+  const limit = type.includes("multipart/form-data") ? CHUNK_BYTES + 256 * 1024 : 64 * 1024;
+  if (!Number.isFinite(declared) || declared <= 0 || declared > limit) {
+    return NextResponse.json({ error: "That upload is too large." }, { status: 413 });
+  }
   try {
     if (type.includes("multipart/form-data")) {
       const form = await request.formData();

@@ -10,7 +10,7 @@ export async function GET() {
   try {
     const videos = await prisma.video.findMany({
       include: videoInclude,
-      orderBy: [{ durationSeconds: { sort: "desc", nulls: "last" } }, { sortOrder: "asc" }, { createdAt: "asc" }],
+      orderBy: [{ queueScore: "desc" }, { createdAt: "asc" }],
     });
     return NextResponse.json({ videos: videos.map(serializeVideo) });
   } catch (error) {

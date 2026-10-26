@@ -67,6 +67,7 @@ model Video {
   playlist        String?
   shortSummary    String?
   durationSeconds Float?
+  queueScore      Float     @default(0)
   sortOrder       Int       @default(0)
   scheduledAt     DateTime?
   privacyStatus   String?

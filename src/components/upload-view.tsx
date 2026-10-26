@@ -69,6 +69,9 @@ export function UploadView() {
         body.set("chunk", chunk, file.name);
         const response = await fetch("/api/videos/direct", { method: "POST", body });
         const data = (await response.json().catch(() => ({}))) as { error?: string };
+        if (response.status === 401) {
+          window.location.assign(`/login?next=${encodeURIComponent(window.location.pathname)}`);
+        }
         if (!response.ok) throw new Error(data.error || "The video could not be sent.");
         setSent(Math.min(file.size, start + chunk.size));
       }
